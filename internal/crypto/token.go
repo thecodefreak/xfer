@@ -38,3 +38,13 @@ func GenerateSalt() ([]byte, error) {
 	}
 	return salt, nil
 }
+
+// EncodeKey encodes a master key to a base64url string for URL fragment
+func EncodeKey(key []byte) string {
+	return base64.URLEncoding.EncodeToString(key)
+}
+
+// DecodeKey decodes a master key from a base64url string
+func DecodeKey(encoded string) ([]byte, error) {
+	return base64.URLEncoding.DecodeString(encoded)
+}

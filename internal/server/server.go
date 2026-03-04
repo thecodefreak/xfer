@@ -26,6 +26,7 @@ type Config struct {
 type Server struct {
 	config       *Config
 	sessionStore *SessionStore
+	csrfManager  *CSRFManager
 	server       *http.Server
 }
 
@@ -34,6 +35,7 @@ func New(config *Config) *Server {
 	return &Server{
 		config:       config,
 		sessionStore: NewSessionStore(config.SessionTTL),
+		csrfManager:  NewCSRFManager(),
 	}
 }
 

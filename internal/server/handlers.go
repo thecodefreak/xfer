@@ -91,8 +91,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// WebSocket upgrade will be implemented in the next commit
-	http.Error(w, "WebSocket handler not yet implemented", http.StatusNotImplemented)
+	// Handle WebSocket connection
+	s.handleWebSocketConnection(w, r, session)
 }
 
 // handleDownloadPage serves the download page

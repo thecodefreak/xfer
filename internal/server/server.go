@@ -14,6 +14,12 @@ type Config struct {
 	BaseURL    string
 	SessionTTL time.Duration
 	MaxSize    int64 // Maximum file size in bytes
+
+	// Rate limiting configuration
+	RateLimitSessions  int  // Sessions per minute
+	RateLimitWebSocket int  // WebSocket connections per minute
+	RateLimitPages     int  // Page requests per minute
+	EnableRateLimit    bool // Enable rate limiting
 }
 
 // Server represents the relay server
@@ -42,9 +48,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/download/", s.handleDownloadPage)
 	mux.HandleFunc("/upload/", s.handleUploadPage)
 
+	// Apply middleware chain
+	handler := ApplyMiddleware(mux, s.config)
+
 	s.server = &http.Server{
 		Addr:         s.config.Port,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

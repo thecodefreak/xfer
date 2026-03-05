@@ -32,6 +32,10 @@ func Send(ctx context.Context, opts SendOptions) error {
 	}
 
 	var totalSize int64
+	var fileInfos []struct {
+		Name string
+		Size int64
+	}
 
 	for _, path := range opts.Files {
 		info, err := os.Stat(path)
@@ -40,6 +44,10 @@ func Send(ctx context.Context, opts SendOptions) error {
 		}
 		if !info.IsDir() {
 			totalSize += info.Size()
+			fileInfos = append(fileInfos, struct {
+				Name string
+				Size int64
+			}{Name: info.Name(), Size: info.Size()})
 		}
 	}
 
@@ -67,6 +75,10 @@ func Send(ctx context.Context, opts SendOptions) error {
 		}
 		defer os.Remove(zipPath)
 		opts.Files = []string{zipPath}
+		fileInfos = []struct {
+			Name string
+			Size int64
+		}{{Name: "files.zip", Size: totalSize}}
 	}
 
 	client := NewClient(opts.ServerURL, opts.Insecure, opts.Timeout)
@@ -137,12 +149,26 @@ func Send(ctx context.Context, opts SendOptions) error {
 	printQRCode(downloadURL)
 	fmt.Printf("\n%s\n\n", downloadURL)
 
-	fmt.Println("Waiting for receiver...")
+	spinner := NewSpinner("Waiting for receiver...")
+	spinnerDone := make(chan struct{})
 
-	// Wait for receiver to connect (server sends StateActive when browser connects)
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-spinnerDone:
+				return
+			case <-ticker.C:
+				fmt.Print(spinner.Tick())
+			}
+		}
+	}()
+
 	for {
 		msg, err := client.ReadMessage(conn)
 		if err != nil {
+			close(spinnerDone)
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -161,18 +187,33 @@ func Send(ctx context.Context, opts SendOptions) error {
 		json.Unmarshal(payloadBytes, &status)
 
 		if status.State == protocol.StateActive {
+			close(spinnerDone)
+			fmt.Print(spinner.Clear())
 			fmt.Println("Receiver connected!")
 			break
 		}
-		// Keep waiting if still pending
 	}
 
-	for _, path := range opts.Files {
-		if err := sendFile(client, conn, path, derivedKeys); err != nil {
+	progress := NewProgress(opts.ShowProgress)
+
+	for i, path := range opts.Files {
+		info := fileInfos[i]
+		progress.SetFile(info.Name, i, len(opts.Files), info.Size)
+
+		if opts.ShowProgress {
+			fmt.Println()
+		}
+
+		if err := sendFileWithProgress(client, conn, path, derivedKeys, progress, opts.ShowProgress); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return fmt.Errorf("failed to send %s: %w", path, err)
+		}
+
+		progress.Complete()
+		if opts.ShowProgress {
+			fmt.Print(progress.Render())
 		}
 	}
 
@@ -187,7 +228,7 @@ func Send(ctx context.Context, opts SendOptions) error {
 	return nil
 }
 
-func sendFile(client *Client, conn *websocket.Conn, path string, keys *crypto.DerivedKeys) error {
+func sendFileWithProgress(client *Client, conn *websocket.Conn, path string, keys *crypto.DerivedKeys, progress *Progress, showProgress bool) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
@@ -233,19 +274,24 @@ func sendFile(client *Client, conn *websocket.Conn, path string, keys *crypto.De
 	for {
 		n, err := file.Read(buf)
 		if n > 0 {
-			ciphertext, err := crypto.EncryptChunk(buf[:n], keys.FileKey, keys.FileNonce, counter)
-			if err != nil {
-				return fmt.Errorf("encryption failed: %w", err)
+			ciphertext, encErr := crypto.EncryptChunk(buf[:n], keys.FileKey, keys.FileNonce, counter)
+			if encErr != nil {
+				return fmt.Errorf("encryption failed: %w", encErr)
 			}
 
 			frame := make([]byte, 4+len(ciphertext))
 			binary.BigEndian.PutUint32(frame[:4], uint32(len(ciphertext)))
 			copy(frame[4:], ciphertext)
 
-			if err := client.SendBinary(conn, frame); err != nil {
-				return fmt.Errorf("failed to send data: %w", err)
+			if sendErr := client.SendBinary(conn, frame); sendErr != nil {
+				return fmt.Errorf("failed to send data: %w", sendErr)
 			}
 			counter++
+
+			progress.Update(int64(n))
+			if showProgress {
+				fmt.Print(progress.Render())
+			}
 		}
 		if err == io.EOF {
 			break

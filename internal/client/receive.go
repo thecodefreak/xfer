@@ -59,10 +59,34 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 	printQRCode(uploadURL)
 	fmt.Printf("\n%s\n\n", uploadURL)
 
-	fmt.Println("Waiting for sender...")
+	spinner := NewSpinner("Waiting for sender...")
+	spinnerDone := make(chan struct{})
+	spinnerActive := true
+
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-spinnerDone:
+				return
+			case <-ticker.C:
+				fmt.Print(spinner.Tick())
+			}
+		}
+	}()
+
+	stopSpinner := func() {
+		if spinnerActive {
+			close(spinnerDone)
+			fmt.Print(spinner.Clear())
+			spinnerActive = false
+		}
+	}
 
 	derivedKeys, err := crypto.DeriveKeys(masterKey)
 	if err != nil {
+		stopSpinner()
 		return fmt.Errorf("failed to derive keys: %w", err)
 	}
 
@@ -71,15 +95,21 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 	var receivedSize int64
 	var counter uint64
 	var receivedAny bool
+	var fileIndex int
 	var fileMeta struct {
 		Name     string `json:"name"`
 		Size     int64  `json:"size"`
 		Checksum string `json:"checksum"`
 	}
 
+	progress := NewProgress(opts.ShowProgress)
+
 	finalizeCurrent := func() error {
 		if currentFile == nil {
 			return nil
+		}
+		if receivedSize != fileMeta.Size {
+			return fmt.Errorf("transfer incomplete for %s", fileMeta.Name)
 		}
 		if err := currentFile.Sync(); err != nil {
 			return fmt.Errorf("failed to sync file: %w", err)
@@ -98,7 +128,10 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 		}
 
 		receivedAny = true
-		fmt.Printf("Saved: %s\n", currentPath)
+		progress.Complete()
+		if opts.ShowProgress {
+			fmt.Print(progress.Render())
+		}
 		currentFile = nil
 		currentPath = ""
 		receivedSize = 0
@@ -106,24 +139,20 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 		return nil
 	}
 
-	fmt.Println("Sender connected!")
-
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
+			stopSpinner()
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || websocket.IsUnexpectedCloseError(err) {
-				if currentFile == nil {
-					break
-				}
-				if receivedSize >= fileMeta.Size {
+				if currentFile != nil {
 					if err := finalizeCurrent(); err != nil {
 						return err
 					}
-					break
 				}
+				break
 			}
 			return fmt.Errorf("failed to read data: %w", err)
 		}
@@ -149,6 +178,8 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 				fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
 				return nil
 			case protocol.MessageTypeMetadata:
+				stopSpinner()
+
 				if currentFile != nil {
 					if receivedSize < fileMeta.Size {
 						return fmt.Errorf("received new file before finishing %s", fileMeta.Name)
@@ -189,7 +220,11 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 
 				json.Unmarshal(metaJSON, &fileMeta)
 
-				fmt.Printf("Receiving: %s (%d bytes)\n", fileMeta.Name, fileMeta.Size)
+				if opts.ShowProgress {
+					fmt.Println()
+				}
+				progress.SetFile(fileMeta.Name, fileIndex, 1, fileMeta.Size)
+				fileIndex++
 
 				currentPath = filepath.Join(opts.OutputDir, fileMeta.Name)
 				currentFile, err = os.Create(currentPath)
@@ -226,6 +261,11 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 		}
 		receivedSize += int64(len(plaintext))
 		counter++
+
+		progress.Update(int64(len(plaintext)))
+		if opts.ShowProgress {
+			fmt.Print(progress.Render())
+		}
 
 		if receivedSize >= fileMeta.Size {
 			if err := finalizeCurrent(); err != nil {

@@ -6,11 +6,15 @@ import "time"
 type MessageType string
 
 const (
-	MessageTypeMetadata MessageType = "metadata"
-	MessageTypeChunk    MessageType = "chunk"
-	MessageTypeComplete MessageType = "complete"
-	MessageTypeStatus   MessageType = "status"
-	MessageTypeError    MessageType = "error"
+	MessageTypeMetadata         MessageType = "metadata"
+	MessageTypeChunk            MessageType = "chunk"
+	MessageTypeFileEnd          MessageType = "file_end"
+	MessageTypeFileCommitted    MessageType = "file_committed"
+	MessageTypeFileReceivedAck  MessageType = "file_received_ack"
+	MessageTypeFileAcknowledged MessageType = "file_acknowledged"
+	MessageTypeComplete         MessageType = "complete"
+	MessageTypeStatus           MessageType = "status"
+	MessageTypeError            MessageType = "error"
 )
 
 // Message is the top-level WebSocket message structure
@@ -65,6 +69,25 @@ type TransferStatus struct {
 type TransferError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// FileEndPayload marks sender-side file stream completion.
+type FileEndPayload struct {
+	FileID             int   `json:"file_id"`
+	ExpectedChunks     int   `json:"expected_chunks"`
+	ExpectedRelayBytes int64 `json:"expected_relay_bytes"`
+}
+
+// FileCommittedPayload signals the relay accepted all frames for a file.
+type FileCommittedPayload struct {
+	FileID        int   `json:"file_id"`
+	RelayedChunks int   `json:"relayed_chunks"`
+	RelayedBytes  int64 `json:"relayed_bytes"`
+}
+
+// FileReceivedAckPayload signals receiver finalized and validated a file.
+type FileReceivedAckPayload struct {
+	FileID int `json:"file_id"`
 }
 
 // Error codes

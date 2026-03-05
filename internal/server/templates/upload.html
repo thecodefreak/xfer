@@ -871,6 +871,34 @@
                 const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
                 const ws = new WebSocket(wsUrl);
+				const pendingAcks = new Map();
+				let socketError = null;
+
+				ws.onmessage = (event) => {
+					if (typeof event.data !== 'string') {
+						return;
+					}
+
+					let msg;
+					try {
+						msg = JSON.parse(event.data);
+					} catch (_) {
+						return;
+					}
+
+					if (msg.type === 'file_acknowledged') {
+						const fileId = msg?.payload?.file_id;
+						const resolve = pendingAcks.get(fileId);
+						if (resolve) {
+							pendingAcks.delete(fileId);
+							resolve();
+						}
+					}
+
+					if (msg.type === 'error') {
+						socketError = msg?.payload?.message || 'Transfer failed';
+					}
+				};
                 
                 await new Promise((resolve, reject) => {
                     ws.onopen = resolve;
@@ -910,12 +938,17 @@
                     
                     let offset = 0;
                     let chunkIndex = 0;
+					let relayBytes = 0;
+					const fileId = index;
 
                     ws.send(JSON.stringify({
                         type: 'metadata',
                         payload: {
                             encrypted_metadata: arrayBufferToBase64(encryptedMeta),
-                            password_protected: false
+							password_protected: false,
+							file_id: fileId,
+							expected_chunks: 0,
+							expected_relay_bytes: 0
                         }
                     }));
                     
@@ -934,6 +967,7 @@
                         const view = new DataView(frame.buffer);
                         view.setUint32(0, encryptedBytes.length, false);
                         frame.set(encryptedBytes, 4);
+						relayBytes += frame.length;
                         ws.send(frame);
                         
                         offset += chunkSize;
@@ -947,16 +981,29 @@
                             await waitForBuffer(ws, 512 * 1024);
                         }
                     }
+
+					await waitForBuffer(ws, 0);
+					ws.send(JSON.stringify({
+						type: 'file_end',
+						payload: {
+							file_id: fileId,
+							expected_chunks: chunkIndex,
+							expected_relay_bytes: relayBytes
+						}
+					}));
+
+					document.getElementById('status').textContent = `Waiting for receiver confirmation (${index + 1}/${totalFiles})...`;
+					await waitForFileAck(pendingAcks, fileId, ws, () => socketError);
                 }
                 
                 await waitForBuffer(ws, 0);
                 ws.send(JSON.stringify({ type: 'complete' }));
                 await waitForBuffer(ws, 0);
+                document.getElementById('status').textContent = 'Finalizing transfer...';
 
                 await new Promise((resolve) => {
                     ws.onclose = resolve;
-                    ws.close(1000, 'Upload complete');
-                    setTimeout(resolve, 2000);
+                    setTimeout(resolve, 30000);
                 });
                 
                 document.getElementById('status').textContent = 'Upload complete!';
@@ -974,6 +1021,31 @@
                 await new Promise(r => setTimeout(r, 50));
             }
         }
+
+		async function waitForFileAck(pendingAcks, fileId, ws, getSocketError) {
+			if (getSocketError()) {
+				throw new Error(getSocketError());
+			}
+
+			await new Promise((resolve, reject) => {
+				pendingAcks.set(fileId, resolve);
+				setTimeout(() => {
+					if (!pendingAcks.has(fileId)) {
+						return;
+					}
+					pendingAcks.delete(fileId);
+					reject(new Error('Timed out waiting for receiver confirmation'));
+				}, 45000);
+			});
+
+			if (ws.readyState !== WebSocket.OPEN) {
+				throw new Error('Upload connection closed before confirmation');
+			}
+
+			if (getSocketError()) {
+				throw new Error(getSocketError());
+			}
+		}
         
         function showError(msg) {
             const el = document.getElementById('error');

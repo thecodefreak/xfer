@@ -25,6 +25,20 @@ func closeConnGracefully(conn *websocket.Conn) {
 	conn.Close()
 }
 
+func enqueueControl(dataChan chan wsMessage, doneChan chan struct{}, msg protocol.Message) bool {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return false
+	}
+
+	select {
+	case dataChan <- wsMessage{Type: websocket.TextMessage, Data: data}:
+		return true
+	case <-doneChan:
+		return false
+	}
+}
+
 // handleWebSocketConnection upgrades and handles WebSocket connections
 func (s *Server) handleWebSocketConnection(w http.ResponseWriter, r *http.Request, session *Session) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -72,6 +86,7 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 	session.dataChan = dataChan
 	session.doneChan = doneChan
 	session.browserReady = browserReady
+	session.fileAckChan = nil
 	session.mu.Unlock()
 
 	<-browserReady
@@ -86,18 +101,18 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 			break
 		}
 
+		select {
+		case dataChan <- wsMessage{Type: messageType, Data: data}:
+		case <-doneChan:
+			return
+		}
+
 		if messageType == websocket.TextMessage {
 			var msg protocol.Message
 			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
 				log.Printf("CLI sender completed for session %s", session.Token)
 				break
 			}
-		}
-
-		select {
-		case dataChan <- wsMessage{Type: messageType, Data: data}:
-		case <-doneChan:
-			return
 		}
 	}
 
@@ -157,11 +172,13 @@ func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
 	browserReady := make(chan struct{})
+	fileAckChan := make(chan int, 32)
 
 	session.mu.Lock()
 	session.dataChan = dataChan
 	session.doneChan = doneChan
 	session.browserReady = browserReady
+	session.fileAckChan = fileAckChan
 	session.mu.Unlock()
 
 	<-browserReady
@@ -169,16 +186,52 @@ func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 	session.SetState(protocol.StateActive)
 	s.sendStatus(conn, protocol.StateActive, "Sender connected, receiving files...")
 
+	go func() {
+		for {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if messageType != websocket.TextMessage {
+				continue
+			}
+
+			var msg protocol.Message
+			if json.Unmarshal(data, &msg) != nil {
+				continue
+			}
+			if msg.Type != protocol.MessageTypeFileReceivedAck {
+				continue
+			}
+
+			payloadBytes, _ := json.Marshal(msg.Payload)
+			var ack protocol.FileReceivedAckPayload
+			if json.Unmarshal(payloadBytes, &ack) != nil {
+				continue
+			}
+
+			select {
+			case fileAckChan <- ack.FileID:
+			default:
+			}
+		}
+	}()
+
+	var forwardedBytes int64
+	var forwardedMessages int64
+
 	for msg := range dataChan {
 		if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
-			log.Printf("CLI receiver write error: %v", err)
+			log.Printf("CLI receiver write error: %v (session=%s forwarded_messages=%d forwarded_bytes=%d)", err, session.Token, forwardedMessages, forwardedBytes)
 			break
 		}
+		forwardedMessages++
+		forwardedBytes += int64(len(msg.Data))
 	}
 
 	close(doneChan)
 	session.SetState(protocol.StateComplete)
-	log.Printf("CLI receiver completed for session %s", session.Token)
+	log.Printf("CLI receiver completed for session %s (forwarded_messages=%d forwarded_bytes=%d)", session.Token, forwardedMessages, forwardedBytes)
 }
 
 // handleBrowserSender handles browser connection for upload
@@ -194,33 +247,169 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 	dataChan := session.dataChan
 	doneChan := session.doneChan
 	browserReady := session.browserReady
+	fileAckChan := session.fileAckChan
 	session.mu.Unlock()
 
 	if browserReady != nil {
 		close(browserReady)
 	}
 
+	var relayedBytes int64
+	var relayedMessages int64
+	currentFileID := -1
+	currentExpectedChunks := 0
+	currentExpectedRelayBytes := int64(0)
+	currentRelayedChunks := 0
+	currentRelayedBytes := int64(0)
+
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("Browser sender read error: %v", err)
+			log.Printf("Browser sender read error: %v (session=%s relayed_messages=%d relayed_bytes=%d)", err, session.Token, relayedMessages, relayedBytes)
 			break
 		}
 
-		if messageType == websocket.TextMessage {
-			var msg protocol.Message
-			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
-				log.Printf("Browser sender completed for session %s", session.Token)
-				break
+		if messageType == websocket.BinaryMessage {
+			if dataChan != nil {
+				select {
+				case dataChan <- wsMessage{Type: messageType, Data: data}:
+					relayedMessages++
+					relayedBytes += int64(len(data))
+					currentRelayedChunks++
+					currentRelayedBytes += int64(len(data))
+				case <-doneChan:
+					return
+				}
+			}
+			continue
+		}
+
+		if messageType != websocket.TextMessage {
+			continue
+		}
+
+		var msg protocol.Message
+		if json.Unmarshal(data, &msg) != nil {
+			continue
+		}
+
+		switch msg.Type {
+		case protocol.MessageTypeMetadata:
+			if dataChan != nil {
+				select {
+				case dataChan <- wsMessage{Type: messageType, Data: data}:
+					relayedMessages++
+					relayedBytes += int64(len(data))
+				case <-doneChan:
+					return
+				}
+			}
+
+			payloadBytes, _ := json.Marshal(msg.Payload)
+			var meta struct {
+				FileID             int   `json:"file_id"`
+				ExpectedChunks     int   `json:"expected_chunks"`
+				ExpectedRelayBytes int64 `json:"expected_relay_bytes"`
+			}
+			if json.Unmarshal(payloadBytes, &meta) == nil {
+				currentFileID = meta.FileID
+				currentExpectedChunks = meta.ExpectedChunks
+				currentExpectedRelayBytes = meta.ExpectedRelayBytes
+				currentRelayedChunks = 0
+				currentRelayedBytes = 0
+			}
+
+		case protocol.MessageTypeFileEnd:
+			payloadBytes, _ := json.Marshal(msg.Payload)
+			var end protocol.FileEndPayload
+			if json.Unmarshal(payloadBytes, &end) != nil {
+				log.Printf("Browser sender invalid file_end payload for session %s", session.Token)
+				return
+			}
+
+			if end.FileID != currentFileID {
+				log.Printf("Browser sender file_id mismatch for session %s: end=%d current=%d", session.Token, end.FileID, currentFileID)
+				return
+			}
+
+			if currentExpectedChunks != 0 && end.ExpectedChunks != currentExpectedChunks {
+				log.Printf("Browser sender expected chunk mismatch for session %s file=%d: meta=%d end=%d", session.Token, end.FileID, currentExpectedChunks, end.ExpectedChunks)
+				return
+			}
+
+			if currentExpectedRelayBytes != 0 && end.ExpectedRelayBytes != currentExpectedRelayBytes {
+				log.Printf("Browser sender expected byte mismatch for session %s file=%d: meta=%d end=%d", session.Token, end.FileID, currentExpectedRelayBytes, end.ExpectedRelayBytes)
+				return
+			}
+
+			if end.ExpectedChunks != currentRelayedChunks || end.ExpectedRelayBytes != currentRelayedBytes {
+				log.Printf("Browser sender incomplete stream for session %s file=%d: relayed_chunks=%d expected_chunks=%d relayed_bytes=%d expected_bytes=%d", session.Token, end.FileID, currentRelayedChunks, end.ExpectedChunks, currentRelayedBytes, end.ExpectedRelayBytes)
+				return
+			}
+
+			committed := protocol.Message{
+				Type: protocol.MessageTypeFileCommitted,
+				Payload: protocol.FileCommittedPayload{
+					FileID:        end.FileID,
+					RelayedChunks: currentRelayedChunks,
+					RelayedBytes:  currentRelayedBytes,
+				},
+			}
+
+			if !enqueueControl(dataChan, doneChan, committed) {
+				return
+			}
+
+			ackTimeout := time.NewTimer(45 * time.Second)
+			acked := false
+			for !acked {
+				select {
+				case ackID := <-fileAckChan:
+					if ackID == end.FileID {
+						acked = true
+					}
+				case <-ackTimeout.C:
+					log.Printf("Timeout waiting for file ack for session %s file=%d", session.Token, end.FileID)
+					return
+				case <-doneChan:
+					ackTimeout.Stop()
+					return
+				}
+			}
+			ackTimeout.Stop()
+
+			ackMsg := protocol.Message{
+				Type: protocol.MessageTypeFileAcknowledged,
+				Payload: protocol.FileReceivedAckPayload{
+					FileID: end.FileID,
+				},
+			}
+			ackData, _ := json.Marshal(ackMsg)
+			if err := conn.WriteMessage(websocket.TextMessage, ackData); err != nil {
+				log.Printf("Failed sending file_acknowledged for session %s file=%d: %v", session.Token, end.FileID, err)
+				return
+			}
+
+		case protocol.MessageTypeComplete:
+			if !enqueueControl(dataChan, doneChan, msg) {
+				return
+			}
+			log.Printf("Browser sender completed for session %s (relayed_messages=%d relayed_bytes=%d)", session.Token, relayedMessages, relayedBytes)
+			break
+		default:
+			if dataChan != nil {
+				select {
+				case dataChan <- wsMessage{Type: messageType, Data: data}:
+					relayedMessages++
+					relayedBytes += int64(len(data))
+				case <-doneChan:
+					return
+				}
 			}
 		}
 
-		if dataChan != nil {
-			select {
-			case dataChan <- wsMessage{Type: messageType, Data: data}:
-			case <-doneChan:
-				return
-			}
+		if msg.Type == protocol.MessageTypeComplete {
+			break
 		}
 	}
 

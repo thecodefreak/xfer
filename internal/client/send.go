@@ -166,6 +166,11 @@ func Send(ctx context.Context, opts SendOptions) error {
 	}()
 
 	for {
+		if err := conn.SetReadDeadline(time.Now().Add(opts.Timeout)); err != nil {
+			close(spinnerDone)
+			return fmt.Errorf("failed to set read deadline: %w", err)
+		}
+
 		msg, err := client.ReadMessage(conn)
 		if err != nil {
 			close(spinnerDone)

@@ -95,7 +95,10 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 	var receivedSize int64
 	var counter uint64
 	var receivedAny bool
+	var completeReceived bool
 	var fileIndex int
+	var currentFileID int
+	var fileCommitted bool
 	var fileMeta struct {
 		Name     string `json:"name"`
 		Size     int64  `json:"size"`
@@ -109,7 +112,7 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 			return nil
 		}
 		if receivedSize != fileMeta.Size {
-			return fmt.Errorf("transfer incomplete for %s", fileMeta.Name)
+			return fmt.Errorf("transfer incomplete for %s: received %d of %d bytes", fileMeta.Name, receivedSize, fileMeta.Size)
 		}
 		if err := currentFile.Sync(); err != nil {
 			return fmt.Errorf("failed to sync file: %w", err)
@@ -136,15 +139,30 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 		currentPath = ""
 		receivedSize = 0
 		counter = 0
+		fileCommitted = false
 		return nil
 	}
 
 	for {
+		readTimeout := opts.Timeout
+		if completeReceived {
+			readTimeout = 3 * time.Second
+		}
+
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			stopSpinner()
+			return fmt.Errorf("failed to set read deadline: %w", err)
+		}
+
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
 			stopSpinner()
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if completeReceived && currentFile == nil {
+				fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
+				return nil
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || websocket.IsUnexpectedCloseError(err) {
 				if currentFile != nil {
@@ -153,6 +171,9 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 					}
 				}
 				break
+			}
+			if completeReceived && currentFile != nil {
+				return fmt.Errorf("transfer incomplete for %s: received %d of %d bytes", fileMeta.Name, receivedSize, fileMeta.Size)
 			}
 			return fmt.Errorf("failed to read data: %w", err)
 		}
@@ -167,13 +188,16 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 			case protocol.MessageTypeStatus:
 				continue
 			case protocol.MessageTypeComplete:
+				completeReceived = true
 				if currentFile != nil {
-					if receivedSize < fileMeta.Size {
-						return fmt.Errorf("transfer incomplete for %s", fileMeta.Name)
+					if fileCommitted && receivedSize >= fileMeta.Size {
+						if err := finalizeCurrent(); err != nil {
+							return err
+						}
+						fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
+						return nil
 					}
-					if err := finalizeCurrent(); err != nil {
-						return err
-					}
+					continue
 				}
 				fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
 				return nil
@@ -195,6 +219,7 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 					PasswordProtected  bool   `json:"password_protected"`
 					EncryptedMasterKey []byte `json:"encrypted_master_key"`
 					Salt               []byte `json:"salt"`
+					FileID             int    `json:"file_id"`
 				}
 				json.Unmarshal(payloadBytes, &metaData)
 
@@ -224,6 +249,7 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 					fmt.Println()
 				}
 				progress.SetFile(fileMeta.Name, fileIndex, 1, fileMeta.Size)
+				currentFileID = metaData.FileID
 				fileIndex++
 
 				currentPath = filepath.Join(opts.OutputDir, fileMeta.Name)
@@ -233,6 +259,37 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 				}
 				receivedSize = 0
 				counter = 0
+				fileCommitted = false
+			case protocol.MessageTypeFileCommitted:
+				payloadBytes, _ := json.Marshal(msg.Payload)
+				var committed protocol.FileCommittedPayload
+				if json.Unmarshal(payloadBytes, &committed) != nil {
+					return fmt.Errorf("invalid file commit payload")
+				}
+
+				if currentFile == nil {
+					continue
+				}
+
+				if committed.FileID != currentFileID {
+					return fmt.Errorf("file commit mismatch: expected id %d got %d", currentFileID, committed.FileID)
+				}
+
+				fileCommitted = true
+				if receivedSize < fileMeta.Size {
+					if opts.ShowProgress {
+						fmt.Print("\rFinalizing... waiting for remaining bytes")
+					}
+					continue
+				}
+
+				if err := finalizeCurrent(); err != nil {
+					return err
+				}
+
+				if err := client.SendMessage(conn, protocol.Message{Type: protocol.MessageTypeFileReceivedAck, Payload: protocol.FileReceivedAckPayload{FileID: committed.FileID}}); err != nil {
+					return fmt.Errorf("failed to send file ack: %w", err)
+				}
 			}
 			continue
 		}
@@ -267,9 +324,12 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 			fmt.Print(progress.Render())
 		}
 
-		if receivedSize >= fileMeta.Size {
+		if fileCommitted && receivedSize >= fileMeta.Size {
 			if err := finalizeCurrent(); err != nil {
 				return err
+			}
+			if err := client.SendMessage(conn, protocol.Message{Type: protocol.MessageTypeFileReceivedAck, Payload: protocol.FileReceivedAckPayload{FileID: currentFileID}}); err != nil {
+				return fmt.Errorf("failed to send file ack: %w", err)
 			}
 		}
 	}

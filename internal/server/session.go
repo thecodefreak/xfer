@@ -26,6 +26,7 @@ type Session struct {
 	dataChan     chan wsMessage
 	doneChan     chan struct{}
 	browserReady chan struct{}
+	fileAckChan  chan int
 
 	mu sync.Mutex // Protects connection writes
 }

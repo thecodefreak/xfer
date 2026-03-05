@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"xfer/internal/protocol"
 
@@ -16,6 +17,12 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
+}
+
+func closeConnGracefully(conn *websocket.Conn) {
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	conn.Close()
 }
 
 // handleWebSocketConnection upgrades and handles WebSocket connections
@@ -48,17 +55,15 @@ func (s *Server) handleWebSocketConnection(w http.ResponseWriter, r *http.Reques
 
 // handleCLISender handles CLI connection for send sessions
 func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
+	defer closeConnGracefully(conn)
 
 	session.SetSenderConn(conn)
 	defer session.SetSenderConn(nil)
 
 	log.Printf("CLI sender connected to session %s", session.Token)
 
-	// Send initial status
 	s.sendStatus(conn, protocol.StatePending, "Waiting for receiver to scan QR code...")
 
-	// Create channels for data relay
 	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
 	browserReady := make(chan struct{})
@@ -69,14 +74,11 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 	session.browserReady = browserReady
 	session.mu.Unlock()
 
-	// Wait for browser to connect before reading from CLI
 	<-browserReady
 
-	// Notify CLI that browser is connected
 	session.SetState(protocol.StateActive)
 	s.sendStatus(conn, protocol.StateActive, "Receiver connected, starting transfer...")
 
-	// Read from CLI and put data in channel
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
@@ -99,36 +101,31 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 		}
 	}
 
-	// Close data channel to signal end of data
 	close(dataChan)
 
-	// Wait for browser to finish receiving
 	<-doneChan
 	log.Printf("CLI sender disconnected from session %s", session.Token)
 }
 
 // handleBrowserReceiver handles browser connection for download
 func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
+	defer closeConnGracefully(conn)
 
 	session.SetRecvConn(conn)
 	defer session.SetRecvConn(nil)
 
 	log.Printf("Browser receiver connected to session %s", session.Token)
 
-	// Get channels
 	session.mu.Lock()
 	dataChan := session.dataChan
 	doneChan := session.doneChan
 	browserReady := session.browserReady
 	session.mu.Unlock()
 
-	// Signal CLI that browser is ready
 	if browserReady != nil {
 		close(browserReady)
 	}
 
-	// Relay data from CLI to browser
 	if dataChan != nil {
 		for msg := range dataChan {
 			if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
@@ -138,7 +135,6 @@ func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
 		}
 	}
 
-	// Signal completion
 	if doneChan != nil {
 		close(doneChan)
 	}
@@ -149,17 +145,15 @@ func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
 
 // handleCLIReceiver handles CLI connection for receive sessions
 func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
+	defer closeConnGracefully(conn)
 
 	session.SetRecvConn(conn)
 	defer session.SetRecvConn(nil)
 
 	log.Printf("CLI receiver connected to session %s", session.Token)
 
-	// Send initial status
 	s.sendStatus(conn, protocol.StatePending, "Waiting for sender to scan QR code...")
 
-	// Create channels for data relay
 	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
 	browserReady := make(chan struct{})
@@ -170,14 +164,11 @@ func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 	session.browserReady = browserReady
 	session.mu.Unlock()
 
-	// Wait for browser to connect
 	<-browserReady
 
-	// Notify CLI that browser is connected
 	session.SetState(protocol.StateActive)
 	s.sendStatus(conn, protocol.StateActive, "Sender connected, receiving files...")
 
-	// Relay data from browser to CLI
 	for msg := range dataChan {
 		if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
 			log.Printf("CLI receiver write error: %v", err)
@@ -192,26 +183,23 @@ func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 
 // handleBrowserSender handles browser connection for upload
 func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
+	defer closeConnGracefully(conn)
 
 	session.SetSenderConn(conn)
 	defer session.SetSenderConn(nil)
 
 	log.Printf("Browser sender connected to session %s", session.Token)
 
-	// Get channels
 	session.mu.Lock()
 	dataChan := session.dataChan
 	doneChan := session.doneChan
 	browserReady := session.browserReady
 	session.mu.Unlock()
 
-	// Signal CLI that browser is ready
 	if browserReady != nil {
 		close(browserReady)
 	}
 
-	// Read from browser and send to CLI via channel
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
@@ -236,9 +224,14 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 		}
 	}
 
-	// Close data channel to signal completion
 	if dataChan != nil {
 		close(dataChan)
+	}
+
+	select {
+	case <-doneChan:
+	case <-time.After(10 * time.Second):
+		log.Printf("Timeout waiting for CLI to drain data for session %s", session.Token)
 	}
 
 	log.Printf("Browser sender disconnected from session %s", session.Token)

@@ -271,6 +271,22 @@
             return btoa(binary);
         }
         
+        function base64UrlToArrayBuffer(base64url) {
+            // Convert base64url to standard base64
+            let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            // Add padding if needed
+            while (base64.length % 4) {
+                base64 += '=';
+            }
+            const binary_string = window.atob(base64);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+        
         function base64ToArrayBuffer(base64) {
             const binary_string = window.atob(base64);
             const len = binary_string.length;
@@ -306,7 +322,7 @@
             if (!parseHash()) return;
             
             try {
-                const keyBytes = base64ToArrayBuffer(atob(keyStr));
+                const keyBytes = base64UrlToArrayBuffer(keyStr);
                 const masterKey = await crypto.subtle.importKey(
                     'raw',
                     keyBytes,

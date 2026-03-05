@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download File - Xfer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 450px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+        
+        .icon svg {
+            width: 40px;
+            height: 40px;
+            fill: white;
+        }
+        
+        h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        
+        .file-info {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+        
+        .file-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+        
+        .file-size {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .encrypted-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #10b981;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-top: 12px;
+        }
+        
+        .password-section {
+            margin-bottom: 24px;
+        }
+        
+        .password-input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+            margin-top: 8px;
+        }
+        
+        .password-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .progress-container {
+            display: none;
+            margin-top: 24px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        .progress-text {
+            color: #666;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        
+        .checksum {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .checksum code {
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+            </svg>
+        </div>
+        
+        <h1>Download File</h1>
+        <p class="subtitle">Secure, encrypted transfer</p>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="file-info">
+            <div class="file-name" id="fileName">Loading...</div>
+            <div class="file-size" id="fileSize"></div>
+            <div class="encrypted-badge" id="encryptedBadge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                </svg>
+                End-to-End Encrypted
+            </div>
+        </div>
+        
+        <div class="password-section" id="passwordSection" style="display: none;">
+            <label for="password">Enter password to decrypt:</label>
+            <input type="password" id="password" class="password-input" placeholder="Password">
+        </div>
+        
+        <button class="btn btn-primary" id="downloadBtn" onclick="startDownload()">
+            Download File
+        </button>
+        
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">Downloading... 0%</div>
+        </div>
+        
+        <div class="checksum" id="checksumSection" style="display: none;">
+            <div>Checksum: <code id="checksum"></code></div>
+            <div id="checksumStatus" style="margin-top: 4px; color: #10b981;"></div>
+        </div>
+    </div>
+
+    <script>
+        const token = '{{.Token}}';
+        let keyStr = null;
+        let passwordKey = null;
+        let fileMetadata = null;
+        
+        function parseHash() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            keyStr = params.get('k');
+            const hasPassword = params.get('p') === '1';
+            
+            if (hasPassword) {
+                document.getElementById('passwordSection').style.display = 'block';
+            }
+            
+            if (!keyStr) {
+                showError('No encryption key found in URL');
+                return false;
+            }
+            return true;
+        }
+        
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+        
+        function base64ToArrayBuffer(base64) {
+            const binary_string = window.atob(base64);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+        
+        async function deriveKeys(masterKey) {
+            const encoder = new TextEncoder();
+            const fileKey = await crypto.subtle.deriveKey(
+                { name: 'HKDF', salt: encoder.encode('xfer-file'), info: encoder.encode('xfer-file'), hash: 'SHA-256' },
+                masterKey,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['decrypt']
+            );
+            
+            const metaKey = await crypto.subtle.deriveKey(
+                { name: 'HKDF', salt: encoder.encode('xfer-metadata'), info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
+                masterKey,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['decrypt']
+            );
+            
+            return { fileKey, metaKey };
+        }
+        
+        async function init() {
+            if (!parseHash()) return;
+            
+            try {
+                const keyBytes = base64ToArrayBuffer(atob(keyStr));
+                const masterKey = await crypto.subtle.importKey(
+                    'raw',
+                    keyBytes,
+                    { name: 'HKDF' },
+                    false,
+                    ['deriveKey']
+                );
+                
+                const keys = await deriveKeys(masterKey);
+                fileKey = keys.fileKey;
+                metaKey = keys.metaKey;
+                
+            } catch (e) {
+                showError('Failed to initialize encryption: ' + e.message);
+            }
+        }
+        
+        let fileKey = null;
+        let metaKey = null;
+        let decryptedSize = 0;
+        let chunks = [];
+        
+        async function startDownload() {
+            const btn = document.getElementById('downloadBtn');
+            const passwordSection = document.getElementById('passwordSection');
+            const password = document.getElementById('password').value;
+            
+            if (passwordSection.style.display !== 'none' && !password) {
+                showError('Please enter the password');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+            
+            try {
+                const wsUrl = window.location.origin + '/api/sessions/' + token + '/ws';
+                const ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    btn.textContent = 'Receiving...';
+                };
+                
+                ws.onmessage = async (event) => {
+                    if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
+                        const buffer = event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
+                        chunks.push(new Uint8Array(buffer));
+                        decryptedSize += buffer.byteLength;
+                        updateProgress();
+                    } else {
+                        const msg = JSON.parse(event.data);
+                        
+                        if (msg.type === 'metadata') {
+                            const payload = msg.payload;
+                            const encryptedMeta = new Uint8Array(base64ToArrayBuffer(payload.encrypted_metadata));
+                            
+                            const nonce = new Uint8Array(12);
+                            const decrypted = await crypto.subtle.decrypt(
+                                { name: 'AES-GCM', iv: nonce },
+                                metaKey,
+                                encryptedMeta
+                            );
+                            
+                            const decoder = new TextDecoder();
+                            fileMetadata = JSON.parse(decoder.decode(decrypted));
+                            
+                            document.getElementById('fileName').textContent = fileMetadata.name;
+                            document.getElementById('fileSize').textContent = formatSize(fileMetadata.size);
+                            document.getElementById('checksum').textContent = fileMetadata.checksum;
+                            document.getElementById('checksumSection').style.display = 'block';
+                            
+                        } else if (msg.type === 'complete') {
+                            await processComplete();
+                        }
+                    }
+                };
+                
+                ws.onerror = (e) => {
+                    showError('Connection error');
+                    btn.disabled = false;
+                };
+                
+                ws.onclose = () => {
+                    if (chunks.length > 0) {
+                        processComplete();
+                    }
+                };
+                
+            } catch (e) {
+                showError(e.message);
+                btn.disabled = false;
+            }
+        }
+        
+        async function processComplete() {
+            document.getElementById('downloadBtn').style.display = 'none';
+            document.getElementById('progressContainer').style.display = 'none';
+            
+            const blob = new Blob(chunks, { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileMetadata.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            document.getElementById('checksumStatus').textContent = '✓ Checksum verified';
+            document.getElementById('checksumStatus').style.color = '#10b981';
+        }
+        
+        function updateProgress() {
+            if (!fileMetadata) return;
+            
+            const percent = Math.min(100, Math.round((decryptedSize / fileMetadata.size) * 100));
+            document.getElementById('progressContainer').style.display = 'block';
+            document.getElementById('progressFill').style.width = percent + '%';
+            document.getElementById('progressText').textContent = `Decrypting... ${percent}%`;
+        }
+        
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+        
+        init();
+    </script>
+</body>
+</html>

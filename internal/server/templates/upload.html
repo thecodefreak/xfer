@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload File - Xfer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+        
+        .icon svg {
+            width: 40px;
+            height: 40px;
+            fill: white;
+        }
+        
+        h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        
+        .dropzone {
+            border: 3px dashed #e5e7eb;
+            border-radius: 16px;
+            padding: 40px 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+        }
+        
+        .dropzone:hover, .dropzone.dragover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        
+        .dropzone-icon {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 16px;
+            opacity: 0.5;
+        }
+        
+        .dropzone-text {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .dropzone-hint {
+            color: #999;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .selected-file {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            word-break: break-all;
+            margin-bottom: 4px;
+        }
+        
+        .file-size {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .remove-file {
+            color: #dc2626;
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 8px;
+            display: inline-block;
+        }
+        
+        .password-section {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        
+        .password-section label {
+            display: block;
+            color: #333;
+            font-size: 14px;
+            margin-bottom: 6px;
+        }
+        
+        .password-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+        
+        .password-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .password-hint {
+            color: #999;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .progress-container {
+            display: none;
+            margin-top: 24px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        .progress-text {
+            color: #666;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+        
+        .success {
+            display: none;
+            text-align: center;
+        }
+        
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: #10b981;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+        }
+        
+        .success-icon svg {
+            width: 40px;
+            height: 40px;
+            fill: white;
+        }
+        
+        .success h2 {
+            color: #10b981;
+            margin-bottom: 8px;
+        }
+        
+        .success p {
+            color: #666;
+        }
+        
+        .error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        
+        .encrypted-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #10b981;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-top: 12px;
+        }
+        
+        .status {
+            color: #666;
+            font-size: 14px;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/>
+            </svg>
+        </div>
+        
+        <h1>Upload File</h1>
+        <p class="subtitle">Secure, encrypted transfer</p>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="dropzone" id="dropzone">
+            <svg class="dropzone-icon" viewBox="0 0 24 24" fill="#999">
+                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
+            </svg>
+            <div class="dropzone-text">Tap to select a file</div>
+            <div class="dropzone-hint">or drag and drop</div>
+        </div>
+        
+        <input type="file" id="fileInput" class="file-input">
+        
+        <div class="selected-file" id="selectedFile">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-size" id="fileSize"></div>
+            <div class="remove-file" onclick="removeFile()">Remove</div>
+        </div>
+        
+        <div class="password-section">
+            <label for="password">Password (optional)</label>
+            <input type="password" id="password" class="password-input" placeholder="Add password protection">
+            <div class="password-hint">Recipient will need this password to decrypt</div>
+        </div>
+        
+        <div class="encrypted-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+            </svg>
+            End-to-End Encrypted
+        </div>
+        
+        <button class="btn btn-primary" id="uploadBtn" onclick="startUpload()" style="margin-top: 20px;">
+            Upload & Encrypt
+        </button>
+        
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-text" id="progressText">Encrypting... 0%</div>
+        </div>
+        
+        <div class="status" id="status"></div>
+        
+        <div class="success" id="success">
+            <div class="success-icon">
+                <svg viewBox="0 0 24 24">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                </svg>
+            </div>
+            <h2>Upload Complete!</h2>
+            <p>File has been sent securely</p>
+        </div>
+    </div>
+
+    <script>
+        const token = '{{.Token}}';
+        let selectedFile = null;
+        let masterKey = null;
+        let keys = null;
+        
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        
+        dropzone.addEventListener('click', () => fileInput.click());
+        
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
+        });
+        
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dragover');
+        });
+        
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+        
+        function handleFileSelect(file) {
+            selectedFile = file;
+            document.getElementById('dropzone').style.display = 'none';
+            document.getElementById('selectedFile').style.display = 'block';
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatSize(file.size);
+        }
+        
+        function removeFile() {
+            selectedFile = null;
+            document.getElementById('dropzone').style.display = 'block';
+            document.getElementById('selectedFile').style.display = 'none';
+            fileInput.value = '';
+        }
+        
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        async function calculateChecksum(buffer) {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        
+        async function deriveKeys(masterKey) {
+            const encoder = new TextEncoder();
+            
+            const fileKey = await crypto.subtle.deriveKey(
+                { name: 'HKDF', salt: encoder.encode('xfer-file'), info: encoder.encode('xfer-file'), hash: 'SHA-256' },
+                masterKey,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['encrypt']
+            );
+            
+            const metaKey = await crypto.subtle.deriveKey(
+                { name: 'HKDF', salt: encoder.encode('xfer-metadata'), info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
+                masterKey,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['encrypt']
+            );
+            
+            return { fileKey, metaKey };
+        }
+        
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+        
+        async function startUpload() {
+            if (!selectedFile) {
+                showError('Please select a file');
+                return;
+            }
+            
+            const btn = document.getElementById('uploadBtn');
+            const password = document.getElementById('password').value;
+            
+            btn.disabled = true;
+            btn.textContent = 'Encrypting...';
+            
+            try {
+                const arrayBuffer = await selectedFile.arrayBuffer();
+                const checksum = await calculateChecksum(arrayBuffer);
+                
+                const keyBytes = new Uint8Array(32);
+                crypto.getRandomValues(keyBytes);
+                
+                masterKey = await crypto.subtle.importKey(
+                    'raw',
+                    keyBytes,
+                    { name: 'HKDF' },
+                    false,
+                    ['deriveKey']
+                );
+                
+                keys = await deriveKeys(masterKey);
+                
+                const metadata = {
+                    name: selectedFile.name,
+                    size: selectedFile.size,
+                    checksum: checksum
+                };
+                
+                const encoder = new TextEncoder();
+                const metaBytes = encoder.encode(JSON.stringify(metadata));
+                
+                const nonce = new Uint8Array(12);
+                const encryptedMeta = await crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv: nonce },
+                    keys.metaKey,
+                    metaBytes
+                );
+                
+                const fileSize = selectedFile.size;
+                const chunkSize = 64 * 1024;
+                const chunks = Math.ceil(fileSize / chunkSize);
+                
+                let offset = 0;
+                let chunkIndex = 0;
+                
+                document.getElementById('progressContainer').style.display = 'block';
+                
+                const wsUrl = window.location.origin + '/api/sessions/' + token + '/ws';
+                const ws = new WebSocket(wsUrl);
+                
+                await new Promise((resolve, reject) => {
+                    ws.onopen = resolve;
+                    ws.onerror = reject;
+                });
+                
+                ws.send(JSON.stringify({
+                    type: 'metadata',
+                    payload: {
+                        encrypted_metadata: arrayBufferToBase64(encryptedMeta)
+                    }
+                }));
+                
+                while (offset < fileSize) {
+                    const chunk = arrayBuffer.slice(offset, offset + chunkSize);
+                    const chunkNonce = new Uint8Array(12);
+                    const view = new DataView(chunkNonce.buffer);
+                    view.setUint32(8, chunkIndex, false);
+                    
+                    const encrypted = await crypto.subtle.encrypt(
+                        { name: 'AES-GCM', iv: chunkNonce },
+                        keys.fileKey,
+                        chunk
+                    );
+                    
+                    ws.send(encrypted);
+                    
+                    offset += chunkSize;
+                    chunkIndex++;
+                    
+                    const percent = Math.min(100, Math.round((offset / fileSize) * 100));
+                    document.getElementById('progressFill').style.width = percent + '%';
+                    document.getElementById('progressText').textContent = `Encrypting... ${percent}%`;
+                }
+                
+                ws.send(JSON.stringify({ type: 'complete' }));
+                
+                document.getElementById('status').textContent = 'Upload complete!';
+                document.getElementById('success').style.display = 'block';
+                btn.style.display = 'none';
+                
+            } catch (e) {
+                showError(e.message);
+                btn.disabled = false;
+            }
+        }
+        
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

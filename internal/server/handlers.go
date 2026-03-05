@@ -117,9 +117,12 @@ func (s *Server) handleDownloadPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve download page (template will be implemented in Phase 2)
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Download Page</h1><p>Token: %s</p><p>Template coming in Phase 2</p></body></html>", token)
+	// Serve download page template
+	data := struct{ Token string }{Token: token}
+	err := downloadTemplate.Execute(w, data)
+	if err != nil {
+		http.Error(w, "Failed to render template", http.StatusInternalServerError)
+	}
 }
 
 // handleUploadPage serves the upload page
@@ -144,7 +147,10 @@ func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve upload page (template will be implemented in Phase 2)
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body><h1>Upload Page</h1><p>Token: %s</p><p>Template coming in Phase 2</p></body></html>", token)
+	// Serve upload page template
+	data := struct{ Token string }{Token: token}
+	err := uploadTemplate.Execute(w, data)
+	if err != nil {
+		http.Error(w, "Failed to render template", http.StatusInternalServerError)
+	}
 }

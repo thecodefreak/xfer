@@ -202,6 +202,7 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 	// Get channels
 	session.mu.Lock()
 	dataChan := session.dataChan
+	doneChan := session.doneChan
 	browserReady := session.browserReady
 	session.mu.Unlock()
 
@@ -229,8 +230,8 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 		if dataChan != nil {
 			select {
 			case dataChan <- wsMessage{Type: messageType, Data: data}:
-			default:
-				log.Printf("Data channel full for session %s", session.Token)
+			case <-doneChan:
+				return
 			}
 		}
 	}

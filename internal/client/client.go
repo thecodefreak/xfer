@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -30,6 +31,13 @@ type Client struct {
 	timeout    time.Duration
 	httpClient *http.Client
 	wsDialer   *websocket.Dialer
+	connStates sync.Map
+}
+
+type connState struct {
+	mu   sync.Mutex
+	done chan struct{}
+	once sync.Once
 }
 
 type SendSession struct {
@@ -177,14 +185,22 @@ func (c *Client) ConnectWebSocket(ctx context.Context, wsURL string) (*websocket
 		return nil
 	})
 
+	state := &connState{done: make(chan struct{})}
+	c.connStates.Store(conn, state)
+
 	go func() {
 		ticker := time.NewTicker(pingInterval)
 		defer ticker.Stop()
 		for {
 			select {
+			case <-state.done:
+				return
 			case <-ticker.C:
+				state.mu.Lock()
 				conn.SetWriteDeadline(time.Now().Add(writeWait))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				err := conn.WriteMessage(websocket.PingMessage, nil)
+				state.mu.Unlock()
+				if err != nil {
 					return
 				}
 			}
@@ -195,15 +211,21 @@ func (c *Client) ConnectWebSocket(ctx context.Context, wsURL string) (*websocket
 }
 
 func (c *Client) SendMessage(conn *websocket.Conn, msg protocol.Message) error {
-	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
+	state := c.getConnState(conn)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (c *Client) SendBinary(conn *websocket.Conn, data []byte) error {
+	state := c.getConnState(conn)
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	return conn.WriteMessage(websocket.BinaryMessage, data)
 }
@@ -242,12 +264,28 @@ func (c *Client) ReadBinary(conn *websocket.Conn) ([]byte, error) {
 }
 
 func (c *Client) CloseConn(conn *websocket.Conn) error {
+	state := c.getConnState(conn)
+	state.once.Do(func() { close(state.done) })
+
+	state.mu.Lock()
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	state.mu.Unlock()
+
+	c.connStates.Delete(conn)
 	if err != nil {
 		return err
 	}
 	return conn.Close()
+}
+
+func (c *Client) getConnState(conn *websocket.Conn) *connState {
+	if state, ok := c.connStates.Load(conn); ok {
+		return state.(*connState)
+	}
+	state := &connState{done: make(chan struct{})}
+	c.connStates.Store(conn, state)
+	return state
 }
 
 func buildURL(base, path string, params map[string]string) string {

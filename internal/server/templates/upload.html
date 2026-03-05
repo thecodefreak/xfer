@@ -296,11 +296,7 @@
             <div class="remove-file" onclick="removeFile()">Remove</div>
         </div>
         
-        <div class="password-section">
-            <label for="password">Password (optional)</label>
-            <input type="password" id="password" class="password-input" placeholder="Add password protection">
-            <div class="password-hint">Recipient will need this password to decrypt</div>
-        </div>
+        <div class="password-section" style="display: none;"></div>
         
         <div class="encrypted-badge">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -338,6 +334,9 @@
         let selectedFile = null;
         let masterKey = null;
         let keys = null;
+        let fileNoncePrefix = null;
+        let metaNoncePrefix = null;
+        let keyStr = null;
         
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
@@ -398,24 +397,67 @@
         
         async function deriveKeys(masterKey) {
             const encoder = new TextEncoder();
-            
+            const emptySalt = new Uint8Array(0);
+
             const fileKey = await crypto.subtle.deriveKey(
-                { name: 'HKDF', salt: encoder.encode('xfer-file'), info: encoder.encode('xfer-file'), hash: 'SHA-256' },
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-file'), hash: 'SHA-256' },
                 masterKey,
                 { name: 'AES-GCM', length: 256 },
                 false,
                 ['encrypt']
             );
-            
+
             const metaKey = await crypto.subtle.deriveKey(
-                { name: 'HKDF', salt: encoder.encode('xfer-metadata'), info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
                 masterKey,
                 { name: 'AES-GCM', length: 256 },
                 false,
                 ['encrypt']
             );
-            
-            return { fileKey, metaKey };
+
+            const fileNonceBits = await crypto.subtle.deriveBits(
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-file-nonce'), hash: 'SHA-256' },
+                masterKey,
+                32
+            );
+
+            const metaNonceBits = await crypto.subtle.deriveBits(
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-meta-nonce'), hash: 'SHA-256' },
+                masterKey,
+                32
+            );
+
+            return {
+                fileKey,
+                metaKey,
+                fileNoncePrefix: new Uint8Array(fileNonceBits),
+                metaNoncePrefix: new Uint8Array(metaNonceBits)
+            };
+        }
+
+        function base64UrlToArrayBuffer(base64url) {
+            let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            while (base64.length % 4) {
+                base64 += '=';
+            }
+            const binary_string = window.atob(base64);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function parseHash() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            keyStr = params.get('k');
+            if (!keyStr) {
+                showError('Missing encryption key in URL');
+                return false;
+            }
+            return true;
         }
         
         function arrayBufferToBase64(buffer) {
@@ -434,27 +476,30 @@
             }
             
             const btn = document.getElementById('uploadBtn');
-            const password = document.getElementById('password').value;
             
             btn.disabled = true;
             btn.textContent = 'Encrypting...';
             
             try {
+                if (!parseHash()) {
+                    return;
+                }
+
                 const arrayBuffer = await selectedFile.arrayBuffer();
                 const checksum = await calculateChecksum(arrayBuffer);
-                
-                const keyBytes = new Uint8Array(32);
-                crypto.getRandomValues(keyBytes);
-                
+
+                const keyBytes = base64UrlToArrayBuffer(keyStr);
                 masterKey = await crypto.subtle.importKey(
                     'raw',
                     keyBytes,
                     { name: 'HKDF' },
                     false,
-                    ['deriveKey']
+                    ['deriveKey', 'deriveBits']
                 );
-                
+
                 keys = await deriveKeys(masterKey);
+                fileNoncePrefix = keys.fileNoncePrefix;
+                metaNoncePrefix = keys.metaNoncePrefix;
                 
                 const metadata = {
                     name: selectedFile.name,
@@ -466,6 +511,7 @@
                 const metaBytes = encoder.encode(JSON.stringify(metadata));
                 
                 const nonce = new Uint8Array(12);
+                nonce.set(metaNoncePrefix, 0);
                 const encryptedMeta = await crypto.subtle.encrypt(
                     { name: 'AES-GCM', iv: nonce },
                     keys.metaKey,
@@ -481,7 +527,8 @@
                 
                 document.getElementById('progressContainer').style.display = 'block';
                 
-                const wsUrl = window.location.origin + '/api/sessions/' + token + '/ws';
+                const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+                const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
                 const ws = new WebSocket(wsUrl);
                 
                 await new Promise((resolve, reject) => {
@@ -492,23 +539,27 @@
                 ws.send(JSON.stringify({
                     type: 'metadata',
                     payload: {
-                        encrypted_metadata: arrayBufferToBase64(encryptedMeta)
+                        encrypted_metadata: arrayBufferToBase64(encryptedMeta),
+                        password_protected: false
                     }
                 }));
                 
                 while (offset < fileSize) {
                     const chunk = arrayBuffer.slice(offset, offset + chunkSize);
-                    const chunkNonce = new Uint8Array(12);
-                    const view = new DataView(chunkNonce.buffer);
-                    view.setUint32(8, chunkIndex, false);
+                    const chunkNonce = buildNonce(fileNoncePrefix, chunkIndex);
                     
                     const encrypted = await crypto.subtle.encrypt(
                         { name: 'AES-GCM', iv: chunkNonce },
                         keys.fileKey,
                         chunk
                     );
-                    
-                    ws.send(encrypted);
+
+                    const encryptedBytes = new Uint8Array(encrypted);
+                    const frame = new Uint8Array(4 + encryptedBytes.length);
+                    const view = new DataView(frame.buffer);
+                    view.setUint32(0, encryptedBytes.length, false);
+                    frame.set(encryptedBytes, 4);
+                    ws.send(frame);
                     
                     offset += chunkSize;
                     chunkIndex++;
@@ -534,6 +585,17 @@
             const el = document.getElementById('error');
             el.textContent = msg;
             el.style.display = 'block';
+        }
+
+        function buildNonce(prefix, counter) {
+            const nonce = new Uint8Array(12);
+            nonce.set(prefix, 0);
+            const view = new DataView(nonce.buffer);
+            const high = Math.floor(counter / 0x100000000);
+            const low = counter >>> 0;
+            view.setUint32(4, high, false);
+            view.setUint32(8, low, false);
+            return nonce;
         }
     </script>
 </body>

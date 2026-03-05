@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"xfer/internal/crypto"
 	"xfer/internal/protocol"
 )
@@ -36,22 +37,48 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 	}
 	defer client.CloseConn(conn)
 
+	stopChan := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.CloseConn(conn)
+		case <-stopChan:
+		}
+	}()
+	defer close(stopChan)
+
+	masterKey, err := crypto.GenerateMasterKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	keyStr := crypto.EncodeKey(masterKey)
+	uploadURL := session.UploadURL + "#k=" + keyStr
+
 	fmt.Println("\nScan QR code to upload:")
-	printQRCode(session.UploadURL)
-	fmt.Printf("\n%s\n\n", session.UploadURL)
+	printQRCode(uploadURL)
+	fmt.Printf("\n%s\n\n", uploadURL)
 
 	fmt.Println("Waiting for sender...")
 
-	msg, err := client.ReadMessage(conn)
-	if err != nil {
-		return fmt.Errorf("connection error: %w", err)
-	}
-	if msg == nil {
-		return fmt.Errorf("unexpected nil message")
-	}
-
-	if msg.Type != protocol.MessageTypeMetadata {
-		return fmt.Errorf("unexpected message type: %s", msg.Type)
+	var msg *protocol.Message
+	for {
+		msg, err = client.ReadMessage(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("connection error: %w", err)
+		}
+		if msg == nil {
+			continue
+		}
+		if msg.Type == protocol.MessageTypeStatus {
+			continue
+		}
+		if msg.Type == protocol.MessageTypeMetadata {
+			break
+		}
 	}
 
 	fmt.Println("Sender connected!")
@@ -64,11 +91,6 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 		Salt               []byte `json:"salt"`
 	}
 	json.Unmarshal(payloadBytes, &metaData)
-
-	masterKey, err := crypto.GenerateMasterKey()
-	if err != nil {
-		return fmt.Errorf("failed to generate key: %w", err)
-	}
 
 	var derivedKeys *crypto.DerivedKeys
 	if metaData.PasswordProtected {
@@ -108,21 +130,38 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 	}
 	defer file.Close()
 
+	var receivedSize int64 = 0
 	var counter uint64 = 0
 	for {
-		data, err := client.ReadBinary(conn)
+		messageType, data, err := conn.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || websocket.IsUnexpectedCloseError(err) {
+				if receivedSize >= fileMeta.Size {
+					break
+				}
+			}
 			return fmt.Errorf("failed to read data: %w", err)
 		}
-		if len(data) == 0 {
+
+		if messageType == websocket.TextMessage {
+			var msg protocol.Message
+			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
+				break
+			}
 			continue
 		}
 
 		if len(data) < 4 {
-			break
+			continue
 		}
 
 		chunkLen := binary.BigEndian.Uint32(data[:4])
+		if int(chunkLen)+4 > len(data) {
+			return fmt.Errorf("invalid chunk length")
+		}
 		ciphertext := data[4 : 4+chunkLen]
 
 		plaintext, err := crypto.DecryptChunk(ciphertext, derivedKeys.FileKey, derivedKeys.FileNonce, counter)
@@ -130,8 +169,15 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 			return fmt.Errorf("decryption failed: %w", err)
 		}
 
-		file.Write(plaintext)
+		if _, err := file.Write(plaintext); err != nil {
+			return fmt.Errorf("failed to write file: %w", err)
+		}
+		receivedSize += int64(len(plaintext))
 		counter++
+
+		if receivedSize >= fileMeta.Size {
+			break
+		}
 	}
 
 	file.Sync()

@@ -299,8 +299,10 @@
         
         async function deriveKeys(masterKey) {
             const encoder = new TextEncoder();
+            const emptySalt = new Uint8Array(0);
+
             const fileKey = await crypto.subtle.deriveKey(
-                { name: 'HKDF', salt: encoder.encode('xfer-file'), info: encoder.encode('xfer-file'), hash: 'SHA-256' },
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-file'), hash: 'SHA-256' },
                 masterKey,
                 { name: 'AES-GCM', length: 256 },
                 false,
@@ -308,14 +310,31 @@
             );
             
             const metaKey = await crypto.subtle.deriveKey(
-                { name: 'HKDF', salt: encoder.encode('xfer-metadata'), info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-metadata'), hash: 'SHA-256' },
                 masterKey,
                 { name: 'AES-GCM', length: 256 },
                 false,
                 ['decrypt']
             );
+
+            const fileNonceBits = await crypto.subtle.deriveBits(
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-file-nonce'), hash: 'SHA-256' },
+                masterKey,
+                32
+            );
+
+            const metaNonceBits = await crypto.subtle.deriveBits(
+                { name: 'HKDF', salt: emptySalt, info: encoder.encode('xfer-meta-nonce'), hash: 'SHA-256' },
+                masterKey,
+                32
+            );
             
-            return { fileKey, metaKey };
+            return { 
+                fileKey, 
+                metaKey, 
+                fileNoncePrefix: new Uint8Array(fileNonceBits),
+                metaNoncePrefix: new Uint8Array(metaNonceBits)
+            };
         }
         
         async function init() {
@@ -328,12 +347,14 @@
                     keyBytes,
                     { name: 'HKDF' },
                     false,
-                    ['deriveKey']
+                    ['deriveKey', 'deriveBits']
                 );
                 
                 const keys = await deriveKeys(masterKey);
                 fileKey = keys.fileKey;
                 metaKey = keys.metaKey;
+                fileNoncePrefix = keys.fileNoncePrefix;
+                metaNoncePrefix = keys.metaNoncePrefix;
                 
             } catch (e) {
                 showError('Failed to initialize encryption: ' + e.message);
@@ -342,8 +363,12 @@
         
         let fileKey = null;
         let metaKey = null;
+        let fileNoncePrefix = null;
+        let metaNoncePrefix = null;
+        let chunkCounter = 0;
         let decryptedSize = 0;
         let chunks = [];
+        let downloadCompleted = false;
         
         async function startDownload() {
             const btn = document.getElementById('downloadBtn');
@@ -359,7 +384,8 @@
             btn.textContent = 'Connecting...';
             
             try {
-                const wsUrl = window.location.origin + '/api/sessions/' + token + '/ws';
+                const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+                const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
                 const ws = new WebSocket(wsUrl);
                 
                 ws.onopen = () => {
@@ -369,9 +395,7 @@
                 ws.onmessage = async (event) => {
                     if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
                         const buffer = event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
-                        chunks.push(new Uint8Array(buffer));
-                        decryptedSize += buffer.byteLength;
-                        updateProgress();
+                        await handleEncryptedChunk(buffer);
                     } else {
                         const msg = JSON.parse(event.data);
                         
@@ -380,6 +404,7 @@
                             const encryptedMeta = new Uint8Array(base64ToArrayBuffer(payload.encrypted_metadata));
                             
                             const nonce = new Uint8Array(12);
+                            nonce.set(metaNoncePrefix, 0);
                             const decrypted = await crypto.subtle.decrypt(
                                 { name: 'AES-GCM', iv: nonce },
                                 metaKey,
@@ -420,6 +445,11 @@
         async function processComplete() {
             document.getElementById('downloadBtn').style.display = 'none';
             document.getElementById('progressContainer').style.display = 'none';
+
+            if (!fileMetadata) {
+                showError('File metadata missing. Please retry transfer.');
+                return;
+            }
             
             const blob = new Blob(chunks, { type: 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
@@ -457,6 +487,52 @@
             const el = document.getElementById('error');
             el.textContent = msg;
             el.style.display = 'block';
+        }
+
+        function buildNonce(prefix, counter) {
+            const nonce = new Uint8Array(12);
+            nonce.set(prefix, 0);
+            const view = new DataView(nonce.buffer);
+            const high = Math.floor(counter / 0x100000000);
+            const low = counter >>> 0;
+            view.setUint32(4, high, false);
+            view.setUint32(8, low, false);
+            return nonce;
+        }
+
+        async function handleEncryptedChunk(buffer) {
+            if (!fileKey || !fileNoncePrefix) {
+                return;
+            }
+
+            const data = new Uint8Array(buffer);
+            if (data.length < 4) {
+                return;
+            }
+
+            const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+            const chunkLen = view.getUint32(0, false);
+            const ciphertext = data.slice(4, 4 + chunkLen);
+            if (ciphertext.length === 0) {
+                return;
+            }
+
+            const nonce = buildNonce(fileNoncePrefix, chunkCounter);
+            const plaintext = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce },
+                fileKey,
+                ciphertext
+            );
+
+            chunks.push(new Uint8Array(plaintext));
+            decryptedSize += plaintext.byteLength;
+            chunkCounter++;
+            updateProgress();
+
+            if (!downloadCompleted && fileMetadata && decryptedSize >= fileMetadata.size) {
+                downloadCompleted = true;
+                await processComplete();
+            }
         }
         
         init();

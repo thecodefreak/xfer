@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	pingInterval = 30 * time.Second
-	pongWait     = 60 * time.Second
-	writeWait    = 10 * time.Second
-	bufferSize   = 64 * 1024
+	pingInterval   = 30 * time.Second
+	pongWait       = 60 * time.Second
+	writeWait      = 10 * time.Second
+	bufferSize     = 64 * 1024
+	maxMessageSize = 256 * 1024
 )
 
 type Client struct {
@@ -169,7 +170,7 @@ func (c *Client) ConnectWebSocket(ctx context.Context, wsURL string) (*websocket
 		return nil, fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
-	conn.SetReadLimit(bufferSize)
+	conn.SetReadLimit(maxMessageSize)
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongWait))

@@ -23,10 +23,17 @@ type Session struct {
 	Metadata   *protocol.FileMetadata
 
 	// Data relay channels
-	dataChan chan []byte
-	doneChan chan struct{}
+	dataChan     chan wsMessage
+	doneChan     chan struct{}
+	browserReady chan struct{}
 
 	mu sync.Mutex // Protects connection writes
+}
+
+// wsMessage holds a WebSocket message with its type
+type wsMessage struct {
+	Type int
+	Data []byte
 }
 
 // SessionStore manages all active sessions

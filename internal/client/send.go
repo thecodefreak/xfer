@@ -83,6 +83,16 @@ func Send(ctx context.Context, opts SendOptions) error {
 	}
 	defer client.CloseConn(conn)
 
+	stopChan := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = client.CloseConn(conn)
+		case <-stopChan:
+		}
+	}()
+	defer close(stopChan)
+
 	masterKey, err := crypto.GenerateMasterKey()
 	if err != nil {
 		return fmt.Errorf("failed to generate key: %w", err)
@@ -133,6 +143,9 @@ func Send(ctx context.Context, opts SendOptions) error {
 	for {
 		msg, err := client.ReadMessage(conn)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("connection error: %w", err)
 		}
 		if msg == nil {
@@ -156,11 +169,17 @@ func Send(ctx context.Context, opts SendOptions) error {
 
 	for _, path := range opts.Files {
 		if err := sendFile(client, conn, path, derivedKeys); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("failed to send %s: %w", path, err)
 		}
 	}
 
 	if err := client.SendMessage(conn, protocol.Message{Type: protocol.MessageTypeComplete}); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to send completion: %w", err)
 	}
 

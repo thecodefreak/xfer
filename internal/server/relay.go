@@ -28,7 +28,7 @@ func (s *Server) handleWebSocketConnection(w http.ResponseWriter, r *http.Reques
 
 	// Determine if this is CLI (first connection) or browser (second connection)
 	session.mu.Lock()
-	isFirstConnection := session.SenderConn == nil
+	isFirstConnection := session.SenderConn == nil && session.RecvConn == nil
 	session.mu.Unlock()
 
 	if session.Type == protocol.SessionTypeSend {
@@ -47,7 +47,6 @@ func (s *Server) handleWebSocketConnection(w http.ResponseWriter, r *http.Reques
 }
 
 // handleCLISender handles CLI connection for send sessions
-// CLI sends data, browser downloads
 func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 	defer conn.Close()
 
@@ -59,41 +58,51 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 	// Send initial status
 	s.sendStatus(conn, protocol.StatePending, "Waiting for receiver to scan QR code...")
 
-	// Create a channel to receive data from CLI
-	dataChan := make(chan []byte, 100)
+	// Create channels for data relay
+	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
+	browserReady := make(chan struct{})
+
 	session.mu.Lock()
 	session.dataChan = dataChan
 	session.doneChan = doneChan
+	session.browserReady = browserReady
 	session.mu.Unlock()
 
-	// Read from CLI in a goroutine
-	go func() {
-		defer close(dataChan)
-		for {
-			messageType, data, err := conn.ReadMessage()
-			if err != nil {
-				log.Printf("CLI sender read error: %v", err)
-				return
-			}
+	// Wait for browser to connect before reading from CLI
+	<-browserReady
 
-			if messageType == websocket.TextMessage {
-				var msg protocol.Message
-				if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
-					log.Printf("CLI sender completed for session %s", session.Token)
-					return
-				}
-			}
+	// Notify CLI that browser is connected
+	session.SetState(protocol.StateActive)
+	s.sendStatus(conn, protocol.StateActive, "Receiver connected, starting transfer...")
 
-			select {
-			case dataChan <- data:
-			case <-doneChan:
-				return
+	// Read from CLI and put data in channel
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("CLI sender read error: %v", err)
+			break
+		}
+
+		if messageType == websocket.TextMessage {
+			var msg protocol.Message
+			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
+				log.Printf("CLI sender completed for session %s", session.Token)
+				break
 			}
 		}
-	}()
 
-	// Wait for completion
+		select {
+		case dataChan <- wsMessage{Type: messageType, Data: data}:
+		case <-doneChan:
+			return
+		}
+	}
+
+	// Close data channel to signal end of data
+	close(dataChan)
+
+	// Wait for browser to finish receiving
 	<-doneChan
 	log.Printf("CLI sender disconnected from session %s", session.Token)
 }
@@ -107,22 +116,22 @@ func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
 
 	log.Printf("Browser receiver connected to session %s", session.Token)
 
-	// Notify CLI that browser connected
+	// Get channels
 	session.mu.Lock()
-	cliConn := session.SenderConn
 	dataChan := session.dataChan
 	doneChan := session.doneChan
+	browserReady := session.browserReady
 	session.mu.Unlock()
 
-	if cliConn != nil {
-		session.SetState(protocol.StateActive)
-		s.sendStatus(cliConn, protocol.StateActive, "Receiver connected, starting transfer...")
+	// Signal CLI that browser is ready
+	if browserReady != nil {
+		close(browserReady)
 	}
 
 	// Relay data from CLI to browser
 	if dataChan != nil {
-		for data := range dataChan {
-			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+		for msg := range dataChan {
+			if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
 				log.Printf("Browser receiver write error: %v", err)
 				break
 			}
@@ -139,7 +148,6 @@ func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
 }
 
 // handleCLIReceiver handles CLI connection for receive sessions
-// Browser uploads, CLI receives
 func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 	defer conn.Close()
 
@@ -151,17 +159,27 @@ func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
 	// Send initial status
 	s.sendStatus(conn, protocol.StatePending, "Waiting for sender to scan QR code...")
 
-	// Create channels for browser to send data
-	dataChan := make(chan []byte, 100)
+	// Create channels for data relay
+	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
+	browserReady := make(chan struct{})
+
 	session.mu.Lock()
 	session.dataChan = dataChan
 	session.doneChan = doneChan
+	session.browserReady = browserReady
 	session.mu.Unlock()
 
+	// Wait for browser to connect
+	<-browserReady
+
+	// Notify CLI that browser is connected
+	session.SetState(protocol.StateActive)
+	s.sendStatus(conn, protocol.StateActive, "Sender connected, receiving files...")
+
 	// Relay data from browser to CLI
-	for data := range dataChan {
-		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+	for msg := range dataChan {
+		if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
 			log.Printf("CLI receiver write error: %v", err)
 			break
 		}
@@ -181,18 +199,18 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 
 	log.Printf("Browser sender connected to session %s", session.Token)
 
-	// Notify CLI that browser connected
+	// Get channels
 	session.mu.Lock()
-	cliConn := session.RecvConn
 	dataChan := session.dataChan
+	browserReady := session.browserReady
 	session.mu.Unlock()
 
-	if cliConn != nil {
-		session.SetState(protocol.StateActive)
-		s.sendStatus(cliConn, protocol.StateActive, "Sender connected, starting transfer...")
+	// Signal CLI that browser is ready
+	if browserReady != nil {
+		close(browserReady)
 	}
 
-	// Read from browser and send to CLI
+	// Read from browser and send to CLI via channel
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
@@ -210,7 +228,7 @@ func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
 
 		if dataChan != nil {
 			select {
-			case dataChan <- data:
+			case dataChan <- wsMessage{Type: messageType, Data: data}:
 			default:
 				log.Printf("Data channel full for session %s", session.Token)
 			}

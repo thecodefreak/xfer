@@ -103,6 +103,7 @@
             margin-bottom: 20px;
             display: none;
         }
+
         
         .file-name {
             font-weight: 600;
@@ -115,14 +116,85 @@
             color: #666;
             font-size: 14px;
         }
-        
-        .remove-file {
-            color: #dc2626;
-            font-size: 12px;
-            cursor: pointer;
-            margin-top: 8px;
-            display: inline-block;
+
+        .file-list {
+            margin-top: 14px;
+            max-height: 180px;
+            overflow-y: auto;
+            text-align: left;
         }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-top: 1px solid #e5e7eb;
+            font-size: 13px;
+        }
+
+        .file-item-name {
+            color: #333;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 260px;
+        }
+
+        .file-item-size {
+            color: #666;
+            font-size: 12px;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .btn-secondary {
+            background: #eef2ff;
+            color: #4f46e5;
+            border: 1px solid #c7d2fe;
+            font-size: 13px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e7ff;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(79, 70, 229, 0.2);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+            font-size: 13px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-ghost:hover {
+            background: #fee2e2;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(220, 38, 38, 0.15);
+        }
+        
         
         .password-section {
             margin-bottom: 20px;
@@ -184,7 +256,7 @@
         
         .progress-container {
             display: none;
-            margin-top: 24px;
+            margin-top: 20px;
         }
         
         .progress-bar {
@@ -211,6 +283,9 @@
         .success {
             display: none;
             text-align: center;
+            margin-top: 18px;
+            padding-top: 18px;
+            border-top: 1px solid #e5e7eb;
         }
         
         .success-icon {
@@ -263,7 +338,7 @@
         .status {
             color: #666;
             font-size: 14px;
-            margin-top: 16px;
+            margin-top: 12px;
         }
     </style>
 </head>
@@ -284,16 +359,20 @@
             <svg class="dropzone-icon" viewBox="0 0 24 24" fill="#999">
                 <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
             </svg>
-            <div class="dropzone-text">Tap to select a file</div>
+            <div class="dropzone-text">Tap to select files</div>
             <div class="dropzone-hint">or drag and drop</div>
         </div>
         
-        <input type="file" id="fileInput" class="file-input">
+        <input type="file" id="fileInput" class="file-input" multiple>
         
         <div class="selected-file" id="selectedFile">
-            <div class="file-name" id="fileName"></div>
-            <div class="file-size" id="fileSize"></div>
-            <div class="remove-file" onclick="removeFile()">Remove</div>
+            <div class="file-name" id="fileSummary"></div>
+            <div class="file-size" id="fileTotal"></div>
+            <div class="file-list" id="fileList"></div>
+            <div class="file-actions">
+                <button class="btn-secondary" type="button" onclick="openFilePicker()">Add more files</button>
+                <button class="btn-ghost" type="button" onclick="removeFile()">Clear all</button>
+            </div>
         </div>
         
         <div class="password-section" style="display: none;"></div>
@@ -325,13 +404,13 @@
                 </svg>
             </div>
             <h2>Upload Complete!</h2>
-            <p>File has been sent securely</p>
+            <p>Files have been sent securely</p>
         </div>
     </div>
 
     <script>
         const token = '{{.Token}}';
-        let selectedFile = null;
+        let selectedFiles = [];
         let masterKey = null;
         let keys = null;
         let fileNoncePrefix = null;
@@ -341,7 +420,7 @@
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
         
-        dropzone.addEventListener('click', () => fileInput.click());
+        dropzone.addEventListener('click', () => openFilePicker());
         
         dropzone.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -356,26 +435,73 @@
             e.preventDefault();
             dropzone.classList.remove('dragover');
             if (e.dataTransfer.files.length > 0) {
-                handleFileSelect(e.dataTransfer.files[0]);
+                handleFileSelect(e.dataTransfer.files, true);
             }
         });
         
         fileInput.addEventListener('change', (e) => {
             if (e.target.files.length > 0) {
-                handleFileSelect(e.target.files[0]);
+                handleFileSelect(e.target.files, true);
             }
+            e.target.value = '';
         });
         
-        function handleFileSelect(file) {
-            selectedFile = file;
+        function openFilePicker() {
+            fileInput.click();
+        }
+
+        function handleFileSelect(files, append) {
+            const incoming = Array.from(files || []);
+            if (incoming.length === 0) {
+                return;
+            }
+
+            if (append) {
+                const existingKeys = new Set(selectedFiles.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
+                for (const file of incoming) {
+                    const key = `${file.name}:${file.size}:${file.lastModified}`;
+                    if (!existingKeys.has(key)) {
+                        selectedFiles.push(file);
+                        existingKeys.add(key);
+                    }
+                }
+            } else {
+                selectedFiles = incoming;
+            }
+
+            if (selectedFiles.length === 0) {
+                return;
+            }
+
             document.getElementById('dropzone').style.display = 'none';
             document.getElementById('selectedFile').style.display = 'block';
-            document.getElementById('fileName').textContent = file.name;
-            document.getElementById('fileSize').textContent = formatSize(file.size);
+            const totalSize = selectedFiles.reduce((sum, file) => sum + file.size, 0);
+            const summary = selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} files selected`;
+            document.getElementById('fileSummary').textContent = summary;
+            document.getElementById('fileTotal').textContent = formatSize(totalSize);
+
+            const list = document.getElementById('fileList');
+            list.innerHTML = '';
+            for (const file of selectedFiles) {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+
+                const name = document.createElement('div');
+                name.className = 'file-item-name';
+                name.textContent = file.name;
+
+                const size = document.createElement('div');
+                size.className = 'file-item-size';
+                size.textContent = formatSize(file.size);
+
+                item.appendChild(name);
+                item.appendChild(size);
+                list.appendChild(item);
+            }
         }
         
         function removeFile() {
-            selectedFile = null;
+            selectedFiles = [];
             document.getElementById('dropzone').style.display = 'block';
             document.getElementById('selectedFile').style.display = 'none';
             fileInput.value = '';
@@ -470,8 +596,8 @@
         }
         
         async function startUpload() {
-            if (!selectedFile) {
-                showError('Please select a file');
+            if (!selectedFiles || selectedFiles.length === 0) {
+                showError('Please select at least one file');
                 return;
             }
             
@@ -485,9 +611,6 @@
                     return;
                 }
 
-                const arrayBuffer = await selectedFile.arrayBuffer();
-                const checksum = await calculateChecksum(arrayBuffer);
-
                 const keyBytes = base64UrlToArrayBuffer(keyStr);
                 masterKey = await crypto.subtle.importKey(
                     'raw',
@@ -500,33 +623,9 @@
                 keys = await deriveKeys(masterKey);
                 fileNoncePrefix = keys.fileNoncePrefix;
                 metaNoncePrefix = keys.metaNoncePrefix;
-                
-                const metadata = {
-                    name: selectedFile.name,
-                    size: selectedFile.size,
-                    checksum: checksum
-                };
-                
-                const encoder = new TextEncoder();
-                const metaBytes = encoder.encode(JSON.stringify(metadata));
-                
-                const nonce = new Uint8Array(12);
-                nonce.set(metaNoncePrefix, 0);
-                const encryptedMeta = await crypto.subtle.encrypt(
-                    { name: 'AES-GCM', iv: nonce },
-                    keys.metaKey,
-                    metaBytes
-                );
-                
-                const fileSize = selectedFile.size;
-                const chunkSize = 64 * 1024;
-                const chunks = Math.ceil(fileSize / chunkSize);
-                
-                let offset = 0;
-                let chunkIndex = 0;
-                
+
                 document.getElementById('progressContainer').style.display = 'block';
-                
+
                 const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
                 const ws = new WebSocket(wsUrl);
@@ -535,38 +634,73 @@
                     ws.onopen = resolve;
                     ws.onerror = reject;
                 });
-                
-                ws.send(JSON.stringify({
-                    type: 'metadata',
-                    payload: {
-                        encrypted_metadata: arrayBufferToBase64(encryptedMeta),
-                        password_protected: false
-                    }
-                }));
-                
-                while (offset < fileSize) {
-                    const chunk = arrayBuffer.slice(offset, offset + chunkSize);
-                    const chunkNonce = buildNonce(fileNoncePrefix, chunkIndex);
-                    
-                    const encrypted = await crypto.subtle.encrypt(
-                        { name: 'AES-GCM', iv: chunkNonce },
-                        keys.fileKey,
-                        chunk
-                    );
 
-                    const encryptedBytes = new Uint8Array(encrypted);
-                    const frame = new Uint8Array(4 + encryptedBytes.length);
-                    const view = new DataView(frame.buffer);
-                    view.setUint32(0, encryptedBytes.length, false);
-                    frame.set(encryptedBytes, 4);
-                    ws.send(frame);
+                const totalFiles = selectedFiles.length;
+
+                for (let index = 0; index < selectedFiles.length; index++) {
+                    const file = selectedFiles[index];
+                    const arrayBuffer = await file.arrayBuffer();
+                    const checksum = await calculateChecksum(arrayBuffer);
+
+                    document.getElementById('status').textContent = `Uploading ${index + 1} of ${totalFiles}: ${file.name}`;
+                    document.getElementById('progressFill').style.width = '0%';
+                    document.getElementById('progressText').textContent = `Encrypting ${index + 1} of ${totalFiles}... 0%`;
+
+                    const metadata = {
+                        name: file.name,
+                        size: file.size,
+                        checksum: checksum
+                    };
                     
-                    offset += chunkSize;
-                    chunkIndex++;
+                    const encoder = new TextEncoder();
+                    const metaBytes = encoder.encode(JSON.stringify(metadata));
                     
-                    const percent = Math.min(100, Math.round((offset / fileSize) * 100));
-                    document.getElementById('progressFill').style.width = percent + '%';
-                    document.getElementById('progressText').textContent = `Encrypting... ${percent}%`;
+                    const nonce = new Uint8Array(12);
+                    nonce.set(metaNoncePrefix, 0);
+                    const encryptedMeta = await crypto.subtle.encrypt(
+                        { name: 'AES-GCM', iv: nonce },
+                        keys.metaKey,
+                        metaBytes
+                    );
+                    
+                    const fileSize = file.size;
+                    const chunkSize = 64 * 1024;
+                    
+                    let offset = 0;
+                    let chunkIndex = 0;
+
+                    ws.send(JSON.stringify({
+                        type: 'metadata',
+                        payload: {
+                            encrypted_metadata: arrayBufferToBase64(encryptedMeta),
+                            password_protected: false
+                        }
+                    }));
+                    
+                    while (offset < fileSize) {
+                        const chunk = arrayBuffer.slice(offset, offset + chunkSize);
+                        const chunkNonce = buildNonce(fileNoncePrefix, chunkIndex);
+                        
+                        const encrypted = await crypto.subtle.encrypt(
+                            { name: 'AES-GCM', iv: chunkNonce },
+                            keys.fileKey,
+                            chunk
+                        );
+
+                        const encryptedBytes = new Uint8Array(encrypted);
+                        const frame = new Uint8Array(4 + encryptedBytes.length);
+                        const view = new DataView(frame.buffer);
+                        view.setUint32(0, encryptedBytes.length, false);
+                        frame.set(encryptedBytes, 4);
+                        ws.send(frame);
+                        
+                        offset += chunkSize;
+                        chunkIndex++;
+                        
+                        const percent = Math.min(100, Math.round((offset / fileSize) * 100));
+                        document.getElementById('progressFill').style.width = percent + '%';
+                        document.getElementById('progressText').textContent = `Encrypting ${index + 1} of ${totalFiles}... ${percent}%`;
+                    }
                 }
                 
                 ws.send(JSON.stringify({ type: 'complete' }));

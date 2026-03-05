@@ -191,6 +191,42 @@
             font-family: monospace;
             word-break: break-all;
         }
+
+        .completed {
+            margin-top: 16px;
+            text-align: left;
+        }
+
+        .completed-title {
+            color: #666;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .completed-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-top: 1px solid #e5e7eb;
+            font-size: 13px;
+        }
+
+        .completed-name {
+            color: #333;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 260px;
+        }
+
+        .completed-size {
+            color: #666;
+            font-size: 12px;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
@@ -237,6 +273,11 @@
             <div>Checksum: <code id="checksum"></code></div>
             <div id="checksumStatus" style="margin-top: 4px; color: #10b981;"></div>
         </div>
+
+        <div class="completed" id="completedSection" style="display: none;">
+            <div class="completed-title">Completed files</div>
+            <div id="completedList"></div>
+        </div>
     </div>
 
     <script>
@@ -244,6 +285,7 @@
         let keyStr = null;
         let passwordKey = null;
         let fileMetadata = null;
+        let completedFiles = [];
         
         function parseHash() {
             const hash = window.location.hash.substring(1);
@@ -369,6 +411,7 @@
         let decryptedSize = 0;
         let chunks = [];
         let downloadCompleted = false;
+        let transferCompleted = false;
         
         async function startDownload() {
             const btn = document.getElementById('downloadBtn');
@@ -402,6 +445,11 @@
                         if (msg.type === 'metadata') {
                             const payload = msg.payload;
                             const encryptedMeta = new Uint8Array(base64ToArrayBuffer(payload.encrypted_metadata));
+
+                            chunks = [];
+                            decryptedSize = 0;
+                            chunkCounter = 0;
+                            downloadCompleted = false;
                             
                             const nonce = new Uint8Array(12);
                             nonce.set(metaNoncePrefix, 0);
@@ -420,7 +468,10 @@
                             document.getElementById('checksumSection').style.display = 'block';
                             
                         } else if (msg.type === 'complete') {
-                            await processComplete();
+                            if (fileMetadata && decryptedSize >= fileMetadata.size) {
+                                await completeCurrentFile();
+                            }
+                            finalizeTransfer();
                         }
                     }
                 };
@@ -431,9 +482,10 @@
                 };
                 
                 ws.onclose = () => {
-                    if (chunks.length > 0) {
-                        processComplete();
+                    if (fileMetadata && decryptedSize >= fileMetadata.size) {
+                        completeCurrentFile();
                     }
+                    finalizeTransfer();
                 };
                 
             } catch (e) {
@@ -442,18 +494,16 @@
             }
         }
         
-        async function processComplete() {
-            document.getElementById('downloadBtn').style.display = 'none';
-            document.getElementById('progressContainer').style.display = 'none';
-
-            if (!fileMetadata) {
-                showError('File metadata missing. Please retry transfer.');
+        async function completeCurrentFile() {
+            if (!fileMetadata || downloadCompleted) {
                 return;
             }
-            
+
+            downloadCompleted = true;
+
             const blob = new Blob(chunks, { type: 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
-            
+
             const a = document.createElement('a');
             a.href = url;
             a.download = fileMetadata.name;
@@ -461,9 +511,26 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            
+
+            completedFiles.push({ name: fileMetadata.name, size: fileMetadata.size });
+            renderCompletedList();
+
             document.getElementById('checksumStatus').textContent = '✓ Checksum verified';
             document.getElementById('checksumStatus').style.color = '#10b981';
+
+            fileMetadata = null;
+            chunks = [];
+            decryptedSize = 0;
+            chunkCounter = 0;
+        }
+
+        function finalizeTransfer() {
+            if (transferCompleted) {
+                return;
+            }
+            transferCompleted = true;
+            document.getElementById('downloadBtn').style.display = 'none';
+            document.getElementById('progressContainer').style.display = 'none';
         }
         
         function updateProgress() {
@@ -487,6 +554,33 @@
             const el = document.getElementById('error');
             el.textContent = msg;
             el.style.display = 'block';
+        }
+
+        function renderCompletedList() {
+            const section = document.getElementById('completedSection');
+            const list = document.getElementById('completedList');
+            list.innerHTML = '';
+
+            for (const file of completedFiles) {
+                const item = document.createElement('div');
+                item.className = 'completed-item';
+
+                const name = document.createElement('div');
+                name.className = 'completed-name';
+                name.textContent = file.name;
+
+                const size = document.createElement('div');
+                size.className = 'completed-size';
+                size.textContent = formatSize(file.size);
+
+                item.appendChild(name);
+                item.appendChild(size);
+                list.appendChild(item);
+            }
+
+            if (completedFiles.length > 0) {
+                section.style.display = 'block';
+            }
         }
 
         function buildNonce(prefix, counter) {
@@ -530,8 +624,7 @@
             updateProgress();
 
             if (!downloadCompleted && fileMetadata && decryptedSize >= fileMetadata.size) {
-                downloadCompleted = true;
-                await processComplete();
+                await completeCurrentFile();
             }
         }
         

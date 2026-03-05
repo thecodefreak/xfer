@@ -61,77 +61,53 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 
 	fmt.Println("Waiting for sender...")
 
-	var msg *protocol.Message
-	for {
-		msg, err = client.ReadMessage(conn)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("connection error: %w", err)
-		}
-		if msg == nil {
-			continue
-		}
-		if msg.Type == protocol.MessageTypeStatus {
-			continue
-		}
-		if msg.Type == protocol.MessageTypeMetadata {
-			break
-		}
-	}
-
-	fmt.Println("Sender connected!")
-
-	payloadBytes, _ := json.Marshal(msg.Payload)
-	var metaData struct {
-		EncryptedMeta      []byte `json:"encrypted_metadata"`
-		PasswordProtected  bool   `json:"password_protected"`
-		EncryptedMasterKey []byte `json:"encrypted_master_key"`
-		Salt               []byte `json:"salt"`
-	}
-	json.Unmarshal(payloadBytes, &metaData)
-
-	var derivedKeys *crypto.DerivedKeys
-	if metaData.PasswordProtected {
-		fmt.Print("Enter password: ")
-		var password string
-		fmt.Scanln(&password)
-
-		masterKey, err = crypto.DecryptMasterKey(metaData.EncryptedMasterKey, password, metaData.Salt)
-		if err != nil {
-			return fmt.Errorf("invalid password: %w", err)
-		}
-	}
-
-	derivedKeys, err = crypto.DeriveKeys(masterKey)
+	derivedKeys, err := crypto.DeriveKeys(masterKey)
 	if err != nil {
 		return fmt.Errorf("failed to derive keys: %w", err)
 	}
 
-	metaJSON, err := crypto.DecryptMetadata(metaData.EncryptedMeta, derivedKeys.MetadataKey, derivedKeys.MetaNonce)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt metadata: %w", err)
-	}
-
+	var currentFile *os.File
+	var currentPath string
+	var receivedSize int64
+	var counter uint64
+	var receivedAny bool
 	var fileMeta struct {
 		Name     string `json:"name"`
 		Size     int64  `json:"size"`
 		Checksum string `json:"checksum"`
 	}
-	json.Unmarshal(metaJSON, &fileMeta)
 
-	fmt.Printf("Receiving: %s (%d bytes)\n", fileMeta.Name, fileMeta.Size)
+	finalizeCurrent := func() error {
+		if currentFile == nil {
+			return nil
+		}
+		if err := currentFile.Sync(); err != nil {
+			return fmt.Errorf("failed to sync file: %w", err)
+		}
+		if err := currentFile.Close(); err != nil {
+			return fmt.Errorf("failed to close file: %w", err)
+		}
 
-	outputPath := filepath.Join(opts.OutputDir, fileMeta.Name)
-	file, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		actualChecksum, err := crypto.CalculateChecksum(currentPath)
+		if err != nil {
+			return fmt.Errorf("failed to verify checksum: %w", err)
+		}
+		if actualChecksum != fileMeta.Checksum {
+			os.Remove(currentPath)
+			return fmt.Errorf("checksum mismatch: expected %s, got %s", fileMeta.Checksum, actualChecksum)
+		}
+
+		receivedAny = true
+		fmt.Printf("Saved: %s\n", currentPath)
+		currentFile = nil
+		currentPath = ""
+		receivedSize = 0
+		counter = 0
+		return nil
 	}
-	defer file.Close()
 
-	var receivedSize int64 = 0
-	var counter uint64 = 0
+	fmt.Println("Sender connected!")
+
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
@@ -139,7 +115,13 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 				return ctx.Err()
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || websocket.IsUnexpectedCloseError(err) {
+				if currentFile == nil {
+					break
+				}
 				if receivedSize >= fileMeta.Size {
+					if err := finalizeCurrent(); err != nil {
+						return err
+					}
 					break
 				}
 			}
@@ -148,9 +130,79 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 
 		if messageType == websocket.TextMessage {
 			var msg protocol.Message
-			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
-				break
+			if json.Unmarshal(data, &msg) != nil {
+				continue
 			}
+
+			switch msg.Type {
+			case protocol.MessageTypeStatus:
+				continue
+			case protocol.MessageTypeComplete:
+				if currentFile != nil {
+					if receivedSize < fileMeta.Size {
+						return fmt.Errorf("transfer incomplete for %s", fileMeta.Name)
+					}
+					if err := finalizeCurrent(); err != nil {
+						return err
+					}
+				}
+				fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
+				return nil
+			case protocol.MessageTypeMetadata:
+				if currentFile != nil {
+					if receivedSize < fileMeta.Size {
+						return fmt.Errorf("received new file before finishing %s", fileMeta.Name)
+					}
+					if err := finalizeCurrent(); err != nil {
+						return err
+					}
+				}
+
+				payloadBytes, _ := json.Marshal(msg.Payload)
+				var metaData struct {
+					EncryptedMeta      []byte `json:"encrypted_metadata"`
+					PasswordProtected  bool   `json:"password_protected"`
+					EncryptedMasterKey []byte `json:"encrypted_master_key"`
+					Salt               []byte `json:"salt"`
+				}
+				json.Unmarshal(payloadBytes, &metaData)
+
+				if metaData.PasswordProtected {
+					fmt.Print("Enter password: ")
+					var password string
+					fmt.Scanln(&password)
+
+					masterKey, err = crypto.DecryptMasterKey(metaData.EncryptedMasterKey, password, metaData.Salt)
+					if err != nil {
+						return fmt.Errorf("invalid password: %w", err)
+					}
+					derivedKeys, err = crypto.DeriveKeys(masterKey)
+					if err != nil {
+						return fmt.Errorf("failed to derive keys: %w", err)
+					}
+				}
+
+				metaJSON, err := crypto.DecryptMetadata(metaData.EncryptedMeta, derivedKeys.MetadataKey, derivedKeys.MetaNonce)
+				if err != nil {
+					return fmt.Errorf("failed to decrypt metadata: %w", err)
+				}
+
+				json.Unmarshal(metaJSON, &fileMeta)
+
+				fmt.Printf("Receiving: %s (%d bytes)\n", fileMeta.Name, fileMeta.Size)
+
+				currentPath = filepath.Join(opts.OutputDir, fileMeta.Name)
+				currentFile, err = os.Create(currentPath)
+				if err != nil {
+					return fmt.Errorf("failed to create file: %w", err)
+				}
+				receivedSize = 0
+				counter = 0
+			}
+			continue
+		}
+
+		if currentFile == nil {
 			continue
 		}
 
@@ -169,28 +221,29 @@ func Receive(ctx context.Context, opts ReceiveOptions) error {
 			return fmt.Errorf("decryption failed: %w", err)
 		}
 
-		if _, err := file.Write(plaintext); err != nil {
+		if _, err := currentFile.Write(plaintext); err != nil {
 			return fmt.Errorf("failed to write file: %w", err)
 		}
 		receivedSize += int64(len(plaintext))
 		counter++
 
 		if receivedSize >= fileMeta.Size {
-			break
+			if err := finalizeCurrent(); err != nil {
+				return err
+			}
 		}
 	}
 
-	file.Sync()
-
-	actualChecksum, err := crypto.CalculateChecksum(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to verify checksum: %w", err)
-	}
-	if actualChecksum != fileMeta.Checksum {
-		os.Remove(outputPath)
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", fileMeta.Checksum, actualChecksum)
+	if currentFile != nil {
+		if err := finalizeCurrent(); err != nil {
+			return err
+		}
 	}
 
-	fmt.Printf("\nTransfer complete! Saved to: %s\n", outputPath)
+	if !receivedAny {
+		return fmt.Errorf("transfer incomplete")
+	}
+
+	fmt.Printf("\nTransfer complete! Files saved to: %s\n", opts.OutputDir)
 	return nil
 }

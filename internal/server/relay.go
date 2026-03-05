@@ -11,162 +11,218 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  64 * 1024, // 64KB
+	ReadBufferSize:  64 * 1024,
 	WriteBufferSize: 64 * 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins for now (CORS will be handled in middleware)
 		return true
 	},
 }
 
 // handleWebSocketConnection upgrades and handles WebSocket connections
 func (s *Server) handleWebSocketConnection(w http.ResponseWriter, r *http.Request, session *Session) {
-	// Upgrade connection
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
 	}
 
-	// Determine if this is sender or receiver based on session type
-	if session.Type == protocol.SessionTypeSend {
-		s.handleSenderConnection(conn, session)
-	} else {
-		s.handleReceiverConnection(conn, session)
-	}
-}
-
-// handleSenderConnection handles the sender's WebSocket connection
-func (s *Server) handleSenderConnection(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
-
-	// Set sender connection
-	session.SetSenderConn(conn)
-	defer func() {
-		session.SetSenderConn(nil)
-	}()
-
-	log.Printf("Sender connected to session %s", session.Token)
-
-	// Send status: waiting for receiver
-	s.sendStatus(conn, protocol.StatePending, "Waiting for receiver to connect...")
-
-	// Wait for receiver to connect, then relay messages
-	for {
-		// Check if session is expired or failed
-		if session.IsExpired() || session.GetState().IsTerminal() {
-			break
-		}
-
-		// Read message from sender
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("Sender read error: %v", err)
-			session.SetState(protocol.StateFailed)
-			break
-		}
-
-		// Only handle binary and text messages
-		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-			continue
-		}
-
-		// Check if receiver is connected
-		session.mu.Lock()
-		recvConn := session.RecvConn
-		session.mu.Unlock()
-
-		if recvConn == nil {
-			// Receiver not connected yet, keep waiting
-			continue
-		}
-
-		// Update state to active if this is the first message
-		if session.GetState() == protocol.StatePending {
-			session.SetState(protocol.StateActive)
-			s.sendStatus(conn, protocol.StateActive, "Transfer in progress...")
-		}
-
-		// Relay message to receiver
-		session.mu.Lock()
-		if session.RecvConn != nil {
-			err = session.RecvConn.WriteMessage(messageType, data)
-		}
-		session.mu.Unlock()
-
-		if err != nil {
-			log.Printf("Failed to relay to receiver: %v", err)
-			session.SetState(protocol.StateFailed)
-			break
-		}
-	}
-
-	log.Printf("Sender disconnected from session %s", session.Token)
-}
-
-// handleReceiverConnection handles the receiver's WebSocket connection
-func (s *Server) handleReceiverConnection(conn *websocket.Conn, session *Session) {
-	defer conn.Close()
-
-	// Set receiver connection
-	session.SetRecvConn(conn)
-	defer func() {
-		session.SetRecvConn(nil)
-	}()
-
-	log.Printf("Receiver connected to session %s", session.Token)
-
-	// Check if sender is connected
+	// Determine if this is CLI (first connection) or browser (second connection)
 	session.mu.Lock()
-	hasSender := session.SenderConn != nil
+	isFirstConnection := session.SenderConn == nil
 	session.mu.Unlock()
 
-	if hasSender {
-		session.SetState(protocol.StateActive)
-		s.sendStatus(conn, protocol.StateActive, "Connected. Transfer starting...")
+	if session.Type == protocol.SessionTypeSend {
+		if isFirstConnection {
+			s.handleCLISender(conn, session)
+		} else {
+			s.handleBrowserReceiver(conn, session)
+		}
 	} else {
-		s.sendStatus(conn, protocol.StatePending, "Waiting for sender...")
+		if isFirstConnection {
+			s.handleCLIReceiver(conn, session)
+		} else {
+			s.handleBrowserSender(conn, session)
+		}
+	}
+}
+
+// handleCLISender handles CLI connection for send sessions
+// CLI sends data, browser downloads
+func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
+	defer conn.Close()
+
+	session.SetSenderConn(conn)
+	defer session.SetSenderConn(nil)
+
+	log.Printf("CLI sender connected to session %s", session.Token)
+
+	// Send initial status
+	s.sendStatus(conn, protocol.StatePending, "Waiting for receiver to scan QR code...")
+
+	// Create a channel to receive data from CLI
+	dataChan := make(chan []byte, 100)
+	doneChan := make(chan struct{})
+	session.mu.Lock()
+	session.dataChan = dataChan
+	session.doneChan = doneChan
+	session.mu.Unlock()
+
+	// Read from CLI in a goroutine
+	go func() {
+		defer close(dataChan)
+		for {
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				log.Printf("CLI sender read error: %v", err)
+				return
+			}
+
+			if messageType == websocket.TextMessage {
+				var msg protocol.Message
+				if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
+					log.Printf("CLI sender completed for session %s", session.Token)
+					return
+				}
+			}
+
+			select {
+			case dataChan <- data:
+			case <-doneChan:
+				return
+			}
+		}
+	}()
+
+	// Wait for completion
+	<-doneChan
+	log.Printf("CLI sender disconnected from session %s", session.Token)
+}
+
+// handleBrowserReceiver handles browser connection for download
+func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
+	defer conn.Close()
+
+	session.SetRecvConn(conn)
+	defer session.SetRecvConn(nil)
+
+	log.Printf("Browser receiver connected to session %s", session.Token)
+
+	// Notify CLI that browser connected
+	session.mu.Lock()
+	cliConn := session.SenderConn
+	dataChan := session.dataChan
+	doneChan := session.doneChan
+	session.mu.Unlock()
+
+	if cliConn != nil {
+		session.SetState(protocol.StateActive)
+		s.sendStatus(cliConn, protocol.StateActive, "Receiver connected, starting transfer...")
 	}
 
-	// Relay messages from sender to receiver
-	for {
-		// Check if session is expired or failed
-		if session.IsExpired() || session.GetState().IsTerminal() {
-			break
-		}
-
-		// Read message from receiver (could be acknowledgments or upload data)
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("Receiver read error: %v", err)
-			session.SetState(protocol.StateFailed)
-			break
-		}
-
-		// Only handle binary and text messages
-		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-			continue
-		}
-
-		// For receive sessions, relay back to sender (upload scenario)
-		session.mu.Lock()
-		senderConn := session.SenderConn
-		session.mu.Unlock()
-
-		if senderConn != nil {
-			session.mu.Lock()
-			err = session.SenderConn.WriteMessage(messageType, data)
-			session.mu.Unlock()
-
-			if err != nil {
-				log.Printf("Failed to relay to sender: %v", err)
-				session.SetState(protocol.StateFailed)
+	// Relay data from CLI to browser
+	if dataChan != nil {
+		for data := range dataChan {
+			if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+				log.Printf("Browser receiver write error: %v", err)
 				break
 			}
 		}
 	}
 
-	log.Printf("Receiver disconnected from session %s", session.Token)
+	// Signal completion
+	if doneChan != nil {
+		close(doneChan)
+	}
+
+	session.SetState(protocol.StateComplete)
+	log.Printf("Browser receiver completed for session %s", session.Token)
+}
+
+// handleCLIReceiver handles CLI connection for receive sessions
+// Browser uploads, CLI receives
+func (s *Server) handleCLIReceiver(conn *websocket.Conn, session *Session) {
+	defer conn.Close()
+
+	session.SetRecvConn(conn)
+	defer session.SetRecvConn(nil)
+
+	log.Printf("CLI receiver connected to session %s", session.Token)
+
+	// Send initial status
+	s.sendStatus(conn, protocol.StatePending, "Waiting for sender to scan QR code...")
+
+	// Create channels for browser to send data
+	dataChan := make(chan []byte, 100)
+	doneChan := make(chan struct{})
+	session.mu.Lock()
+	session.dataChan = dataChan
+	session.doneChan = doneChan
+	session.mu.Unlock()
+
+	// Relay data from browser to CLI
+	for data := range dataChan {
+		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			log.Printf("CLI receiver write error: %v", err)
+			break
+		}
+	}
+
+	close(doneChan)
+	session.SetState(protocol.StateComplete)
+	log.Printf("CLI receiver completed for session %s", session.Token)
+}
+
+// handleBrowserSender handles browser connection for upload
+func (s *Server) handleBrowserSender(conn *websocket.Conn, session *Session) {
+	defer conn.Close()
+
+	session.SetSenderConn(conn)
+	defer session.SetSenderConn(nil)
+
+	log.Printf("Browser sender connected to session %s", session.Token)
+
+	// Notify CLI that browser connected
+	session.mu.Lock()
+	cliConn := session.RecvConn
+	dataChan := session.dataChan
+	session.mu.Unlock()
+
+	if cliConn != nil {
+		session.SetState(protocol.StateActive)
+		s.sendStatus(cliConn, protocol.StateActive, "Sender connected, starting transfer...")
+	}
+
+	// Read from browser and send to CLI
+	for {
+		messageType, data, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("Browser sender read error: %v", err)
+			break
+		}
+
+		if messageType == websocket.TextMessage {
+			var msg protocol.Message
+			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
+				log.Printf("Browser sender completed for session %s", session.Token)
+				break
+			}
+		}
+
+		if dataChan != nil {
+			select {
+			case dataChan <- data:
+			default:
+				log.Printf("Data channel full for session %s", session.Token)
+			}
+		}
+	}
+
+	// Close data channel to signal completion
+	if dataChan != nil {
+		close(dataChan)
+	}
+
+	log.Printf("Browser sender disconnected from session %s", session.Token)
 }
 
 // sendStatus sends a status message over WebSocket

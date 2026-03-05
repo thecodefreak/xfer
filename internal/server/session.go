@@ -22,6 +22,10 @@ type Session struct {
 	RecvConn   *websocket.Conn
 	Metadata   *protocol.FileMetadata
 
+	// Data relay channels
+	dataChan chan []byte
+	doneChan chan struct{}
+
 	mu sync.Mutex // Protects connection writes
 }
 

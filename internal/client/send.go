@@ -128,27 +128,31 @@ func Send(ctx context.Context, opts SendOptions) error {
 	fmt.Printf("\n%s\n\n", downloadURL)
 
 	fmt.Println("Waiting for receiver...")
-	msg, err := client.ReadMessage(conn)
-	if err != nil {
-		return fmt.Errorf("connection error: %w", err)
-	}
-	if msg == nil {
-		return fmt.Errorf("unexpected nil message")
-	}
 
-	if msg.Type != protocol.MessageTypeStatus {
-		return fmt.Errorf("unexpected message type: %s", msg.Type)
+	// Wait for receiver to connect (server sends StateActive when browser connects)
+	for {
+		msg, err := client.ReadMessage(conn)
+		if err != nil {
+			return fmt.Errorf("connection error: %w", err)
+		}
+		if msg == nil {
+			continue
+		}
+
+		if msg.Type != protocol.MessageTypeStatus {
+			continue
+		}
+
+		var status protocol.TransferStatus
+		payloadBytes, _ := json.Marshal(msg.Payload)
+		json.Unmarshal(payloadBytes, &status)
+
+		if status.State == protocol.StateActive {
+			fmt.Println("Receiver connected!")
+			break
+		}
+		// Keep waiting if still pending
 	}
-
-	var status protocol.TransferStatus
-	payloadBytes, _ := json.Marshal(msg.Payload)
-	json.Unmarshal(payloadBytes, &status)
-
-	if status.State != protocol.StateActive {
-		return fmt.Errorf("session not active: %s", status.Message)
-	}
-
-	fmt.Println("Receiver connected!")
 
 	for _, path := range opts.Files {
 		if err := sendFile(client, conn, path, derivedKeys); err != nil {

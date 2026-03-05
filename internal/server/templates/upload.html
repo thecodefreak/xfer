@@ -658,13 +658,32 @@
         let fileNoncePrefix = null;
         let metaNoncePrefix = null;
         let keyStr = null;
+        let isUploading = false;
         
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('fileInput');
+
+        function setUploadLock(locked) {
+            isUploading = locked;
+            dropzone.style.pointerEvents = locked ? 'none' : 'auto';
+            fileInput.disabled = locked;
+
+            const actions = document.getElementById('fileActions');
+            if (actions) {
+                if (locked) {
+                    actions.style.display = 'none';
+                } else if (selectedFiles.length > 0) {
+                    actions.style.display = 'flex';
+                }
+            }
+        }
         
         dropzone.addEventListener('click', () => openFilePicker());
         
         dropzone.addEventListener('dragover', (e) => {
+            if (isUploading) {
+                return;
+            }
             e.preventDefault();
             dropzone.classList.add('dragover');
         });
@@ -675,6 +694,9 @@
         
         dropzone.addEventListener('drop', (e) => {
             e.preventDefault();
+            if (isUploading) {
+                return;
+            }
             dropzone.classList.remove('dragover');
             if (e.dataTransfer.files.length > 0) {
                 handleFileSelect(e.dataTransfer.files, true);
@@ -682,6 +704,10 @@
         });
         
         fileInput.addEventListener('change', (e) => {
+            if (isUploading) {
+                e.target.value = '';
+                return;
+            }
             if (e.target.files.length > 0) {
                 handleFileSelect(e.target.files, true);
             }
@@ -689,10 +715,16 @@
         });
         
         function openFilePicker() {
+            if (isUploading) {
+                return;
+            }
             fileInput.click();
         }
 
         function handleFileSelect(files, append) {
+            if (isUploading) {
+                return;
+            }
             const incoming = Array.from(files || []);
             if (incoming.length === 0) {
                 return;
@@ -743,9 +775,16 @@
         }
         
         function removeFile() {
+            if (isUploading) {
+                return;
+            }
             selectedFiles = [];
             document.getElementById('dropzone').style.display = 'block';
             document.getElementById('selectedFile').style.display = 'none';
+            const actions = document.getElementById('fileActions');
+            if (actions) {
+                actions.style.display = 'flex';
+            }
             fileInput.value = '';
         }
         
@@ -838,6 +877,9 @@
         }
         
         async function startUpload() {
+            if (isUploading) {
+                return;
+            }
             if (!selectedFiles || selectedFiles.length === 0) {
                 showError('Please select at least one file');
                 return;
@@ -852,6 +894,8 @@
                 if (!parseHash()) {
                     return;
                 }
+
+                setUploadLock(true);
 
                 const keyBytes = base64UrlToArrayBuffer(keyStr);
                 masterKey = await crypto.subtle.importKey(
@@ -1012,7 +1056,9 @@
                 
             } catch (e) {
                 showError(e.message);
+                setUploadLock(false);
                 btn.disabled = false;
+                btn.textContent = 'Upload & Encrypt';
             }
         }
 

@@ -1,0 +1,13 @@
+.git
+.github
+.tmp
+dist
+build
+*.log
+*.tmp
+*.out
+*.test
+*.db
+*.db-journal
+xfer
+xfer-server

@@ -118,7 +118,7 @@ xfer version                   # Show version
 docker run -d \
   -e XFER_BASE_URL=https://xfer.example.com \
   -p 127.0.0.1:8080:8080 \
-  ghcr.io/user/xfer:server
+  ghcr.io/thecodefreak/xfer:server
 ```
 
 ### Docker Compose
@@ -126,7 +126,7 @@ docker run -d \
 ```yaml
 services:
   xfer:
-    image: ghcr.io/user/xfer:server
+    image: ghcr.io/thecodefreak/xfer:server
     environment:
       XFER_BASE_URL: https://xfer.example.com
       XFER_PORT: 8080
@@ -147,7 +147,7 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md) for technical details.
 
 ```bash
 # Clone repository
-git clone https://github.com/user/xfer.git
+git clone https://github.com/thecodefreak/xfer.git
 cd xfer
 
 # Install dependencies

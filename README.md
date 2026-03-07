@@ -12,6 +12,7 @@ Xfer enables seamless file sharing between devices using QR codes and end-to-end
 - 🚀 **Works across networks** - NAT and firewall friendly
 - 🔐 **Zero-knowledge server** - relay never sees plaintext
 - ✅ **Automatic checksum verification**
+- 🧾 **Strict completion semantics** (sender succeeds only after receiver finalizes)
 - 📊 **Real-time progress tracking**
 - 🗂️ **Transfer history** with privacy controls
 - 🎨 **Modern, friendly UI**
@@ -91,10 +92,10 @@ Configuration file: `~/.config/xfer/config.yaml`
 ```yaml
 server: "https://xfer.example.com"
 timeout: 10m
-output_dir: "."
+output-dir: "."
 progress: true
 history: true
-hide_filenames: false
+hide-filenames: false
 ```
 
 ### Commands
@@ -118,7 +119,7 @@ xfer version                   # Show version
 docker run -d \
   -e XFER_BASE_URL=https://xfer.example.com \
   -p 127.0.0.1:8080:8080 \
-  ghcr.io/thecodefreak/xfer:server
+  ghcr.io/thecodefreak/xfer:latest
 ```
 
 ### Docker Compose
@@ -126,7 +127,7 @@ docker run -d \
 ```yaml
 services:
   xfer:
-    image: ghcr.io/thecodefreak/xfer:server
+    image: ghcr.io/thecodefreak/xfer:latest
     environment:
       XFER_BASE_URL: https://xfer.example.com
       XFER_PORT: 8080
@@ -137,7 +138,21 @@ services:
     restart: unless-stopped
 ```
 
+### Distroless Runtime Note
+
+Server images now run on distroless as non-root. If you are upgrading from an older image, remove any explicit `xfer` user setting and recreate the container.
+
+For Compose, avoid `user: xfer`; use `user: "65532:65532"` only if you need explicit user mapping.
+
+### Troubleshooting
+
+- `unable to find user xfer: no matching entries in passwd file`
+  - Cause: old container config still forces `xfer` user, but new image uses distroless `nonroot`
+  - Fix: remove `--user xfer` / `user: xfer`, recreate container, then start again
+
 **Note:** Server requires HTTPS reverse proxy (nginx/Traefik/Caddy) for production.
+
+Docker release tags are published as `v*` and `latest`.
 
 ## Architecture
 

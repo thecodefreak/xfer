@@ -566,6 +566,77 @@
         let downloadCompleted = false;
         let transferCompleted = false;
         
+        let messageQueue = [];
+        let processing = false;
+        let completeReceived = false;
+        let closeReceived = false;
+        let queueResolve = null;
+        
+        async function processQueue() {
+            if (processing) return;
+            processing = true;
+            
+            while (messageQueue.length > 0) {
+                const item = messageQueue.shift();
+                
+                if (item.type === 'binary') {
+                    await handleEncryptedChunk(item.data);
+                } else if (item.type === 'metadata') {
+                    await handleMetadata(item.payload);
+                } else if (item.type === 'complete') {
+                    completeReceived = true;
+                    if (fileMetadata && decryptedSize >= fileMetadata.size) {
+                        await completeCurrentFile();
+                    }
+                } else if (item.type === 'close') {
+                    closeReceived = true;
+                }
+            }
+            
+            processing = false;
+            
+            if ((completeReceived || closeReceived) && fileMetadata && decryptedSize >= fileMetadata.size && !downloadCompleted) {
+                await completeCurrentFile();
+            }
+            
+            if ((completeReceived || closeReceived) && !downloadCompleted && fileMetadata && decryptedSize > 0 && decryptedSize < fileMetadata.size) {
+                showError(`Transfer incomplete: received ${formatSize(decryptedSize)} of ${formatSize(fileMetadata.size)}`);
+            }
+            
+            if ((completeReceived || closeReceived) && messageQueue.length === 0) {
+                finalizeTransfer();
+                if (queueResolve) {
+                    queueResolve();
+                    queueResolve = null;
+                }
+            }
+        }
+        
+        async function handleMetadata(payload) {
+            const encryptedMeta = new Uint8Array(base64ToArrayBuffer(payload.encrypted_metadata));
+
+            chunks = [];
+            decryptedSize = 0;
+            chunkCounter = 0;
+            downloadCompleted = false;
+            
+            const nonce = new Uint8Array(12);
+            nonce.set(metaNoncePrefix, 0);
+            const decrypted = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce },
+                metaKey,
+                encryptedMeta
+            );
+            
+            const decoder = new TextDecoder();
+            fileMetadata = JSON.parse(decoder.decode(decrypted));
+            
+            document.getElementById('fileName').textContent = fileMetadata.name;
+            document.getElementById('fileSize').textContent = formatSize(fileMetadata.size);
+            document.getElementById('checksum').textContent = fileMetadata.checksum;
+            document.getElementById('checksumSection').style.display = 'block';
+        }
+        
         async function startDownload() {
             const btn = document.getElementById('downloadBtn');
             const passwordSection = document.getElementById('passwordSection');
@@ -579,6 +650,11 @@
             btn.disabled = true;
             btn.textContent = 'Connecting...';
             
+            messageQueue = [];
+            processing = false;
+            completeReceived = false;
+            closeReceived = false;
+            
             try {
                 const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
@@ -591,42 +667,17 @@
                 ws.onmessage = async (event) => {
                     if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
                         const buffer = event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
-                        await handleEncryptedChunk(buffer);
+                        messageQueue.push({ type: 'binary', data: buffer });
                     } else {
                         const msg = JSON.parse(event.data);
                         
                         if (msg.type === 'metadata') {
-                            const payload = msg.payload;
-                            const encryptedMeta = new Uint8Array(base64ToArrayBuffer(payload.encrypted_metadata));
-
-                            chunks = [];
-                            decryptedSize = 0;
-                            chunkCounter = 0;
-                            downloadCompleted = false;
-                            
-                            const nonce = new Uint8Array(12);
-                            nonce.set(metaNoncePrefix, 0);
-                            const decrypted = await crypto.subtle.decrypt(
-                                { name: 'AES-GCM', iv: nonce },
-                                metaKey,
-                                encryptedMeta
-                            );
-                            
-                            const decoder = new TextDecoder();
-                            fileMetadata = JSON.parse(decoder.decode(decrypted));
-                            
-                            document.getElementById('fileName').textContent = fileMetadata.name;
-                            document.getElementById('fileSize').textContent = formatSize(fileMetadata.size);
-                            document.getElementById('checksum').textContent = fileMetadata.checksum;
-                            document.getElementById('checksumSection').style.display = 'block';
-                            
+                            messageQueue.push({ type: 'metadata', payload: msg.payload });
                         } else if (msg.type === 'complete') {
-                            if (fileMetadata && decryptedSize >= fileMetadata.size) {
-                                await completeCurrentFile();
-                            }
-                            finalizeTransfer();
+                            messageQueue.push({ type: 'complete' });
                         }
                     }
+                    processQueue();
                 };
                 
                 ws.onerror = (e) => {
@@ -635,12 +686,8 @@
                 };
                 
                 ws.onclose = (event) => {
-                    if (fileMetadata && decryptedSize >= fileMetadata.size) {
-                        completeCurrentFile();
-                    } else if (fileMetadata && decryptedSize > 0 && decryptedSize < fileMetadata.size) {
-                        showError(`Transfer incomplete: received ${formatSize(decryptedSize)} of ${formatSize(fileMetadata.size)}`);
-                    }
-                    finalizeTransfer();
+                    messageQueue.push({ type: 'close' });
+                    processQueue();
                 };
                 
             } catch (e) {
@@ -777,10 +824,6 @@
             decryptedSize += plaintext.byteLength;
             chunkCounter++;
             updateProgress();
-
-            if (!downloadCompleted && fileMetadata && decryptedSize >= fileMetadata.size) {
-                await completeCurrentFile();
-            }
         }
         
         init();

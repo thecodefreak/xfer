@@ -288,6 +288,10 @@ func (c *Client) getConnState(conn *websocket.Conn) *connState {
 	return state
 }
 
+func (c *Client) ServerURL() string {
+	return c.serverURL
+}
+
 func buildURL(base, path string, params map[string]string) string {
 	u, _ := url.Parse(base + path)
 	q := u.Query()

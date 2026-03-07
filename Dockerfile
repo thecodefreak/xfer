@@ -20,13 +20,11 @@ RUN set -eux; \
     fi; \
     go build -trimpath -ldflags "-s -w" -o /out/xfer-server ./cmd/xfer-server
 
-FROM alpine:3.20
-
-RUN adduser -D -u 10001 xfer
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/xfer-server /usr/local/bin/xfer-server
 
-USER xfer
+USER nonroot:nonroot
 EXPOSE 8080
 
 ENTRYPOINT ["xfer-server"]

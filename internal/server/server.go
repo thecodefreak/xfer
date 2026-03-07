@@ -93,3 +93,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"status":"healthy","sessions":%d}`, s.sessionStore.Count())
 }
+
+// Handler returns an http.Handler for the server (useful for testing)
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/api/sessions", s.handleCreateSession)
+	mux.HandleFunc("/api/sessions/", s.handleWebSocket)
+	mux.HandleFunc("/download/", s.handleDownloadPage)
+	mux.HandleFunc("/upload/", s.handleUploadPage)
+	return mux
+}

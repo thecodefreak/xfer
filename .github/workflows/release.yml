@@ -138,6 +138,7 @@ jobs:
           name: artifacts-${{ matrix.platform_id }}
           path: dist/*
           if-no-files-found: error
+          compression-level: 0
 
   scan-final-image:
     name: Scan final Docker image
@@ -175,11 +176,32 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-artifacts, scan-final-image]
     steps:
-      - name: Download all artifacts
+      - name: Download platform artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          pattern: artifacts-*
+          path: downloaded-artifacts
+          merge-multiple: false
+
+      - name: Consolidate artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob
+
+          found=0
+          for artifact_dir in downloaded-artifacts/artifacts-*; do
+            for file in "$artifact_dir"/*; do
+              cp "$file" dist/
+              found=1
+            done
+          done
+
+          if [[ "$found" -ne 1 ]]; then
+            echo "No release artifacts were downloaded"
+            exit 1
+          fi
 
       - name: Generate checksums
         env:

@@ -25,6 +25,18 @@ func closeConnGracefully(conn *websocket.Conn) {
 	conn.Close()
 }
 
+func (s *Server) sendStatusToSender(session *Session, state protocol.SessionState, message string) {
+	session.mu.Lock()
+	senderConn := session.SenderConn
+	session.mu.Unlock()
+
+	if senderConn == nil {
+		return
+	}
+
+	s.sendStatus(senderConn, state, message)
+}
+
 func enqueueControl(dataChan chan wsMessage, doneChan chan struct{}, msg protocol.Message) bool {
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -81,12 +93,15 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 	dataChan := make(chan wsMessage, 100)
 	doneChan := make(chan struct{})
 	browserReady := make(chan struct{})
+	downloadAckChan := make(chan struct{}, 1)
 
 	session.mu.Lock()
 	session.dataChan = dataChan
 	session.doneChan = doneChan
 	session.browserReady = browserReady
 	session.fileAckChan = nil
+	session.downloadAckChan = downloadAckChan
+	session.senderCompleted = false
 	session.mu.Unlock()
 
 	<-browserReady
@@ -110,6 +125,9 @@ func (s *Server) handleCLISender(conn *websocket.Conn, session *Session) {
 		if messageType == websocket.TextMessage {
 			var msg protocol.Message
 			if json.Unmarshal(data, &msg) == nil && msg.Type == protocol.MessageTypeComplete {
+				session.mu.Lock()
+				session.senderCompleted = true
+				session.mu.Unlock()
 				log.Printf("CLI sender completed for session %s", session.Token)
 				break
 			}
@@ -135,27 +153,106 @@ func (s *Server) handleBrowserReceiver(conn *websocket.Conn, session *Session) {
 	dataChan := session.dataChan
 	doneChan := session.doneChan
 	browserReady := session.browserReady
+	downloadAckChan := session.downloadAckChan
 	session.mu.Unlock()
 
 	if browserReady != nil {
 		close(browserReady)
 	}
 
-	if dataChan != nil {
-		for msg := range dataChan {
-			if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
-				log.Printf("Browser receiver write error: %v", err)
-				break
-			}
+	closeDone := func() {
+		if doneChan != nil {
+			close(doneChan)
+			doneChan = nil
 		}
 	}
 
-	if doneChan != nil {
-		close(doneChan)
+	if dataChan == nil || downloadAckChan == nil {
+		s.sendStatusToSender(session, protocol.StateFailed, "Transfer session unavailable")
+		closeDone()
+		session.SetState(protocol.StateFailed)
+		log.Printf("Browser receiver missing relay channels for session %s", session.Token)
+		return
 	}
 
-	session.SetState(protocol.StateComplete)
-	log.Printf("Browser receiver completed for session %s", session.Token)
+	for msg := range dataChan {
+		if err := conn.WriteMessage(msg.Type, msg.Data); err != nil {
+			s.sendStatusToSender(session, protocol.StateFailed, "Receiver connection dropped during transfer")
+			closeDone()
+			session.SetState(protocol.StateFailed)
+			log.Printf("Browser receiver write error: %v", err)
+			return
+		}
+	}
+
+	session.mu.Lock()
+	senderCompleted := session.senderCompleted
+	session.mu.Unlock()
+
+	if !senderCompleted {
+		s.sendStatusToSender(session, protocol.StateFailed, "Sender disconnected before transfer completion")
+		closeDone()
+		session.SetState(protocol.StateFailed)
+		log.Printf("Browser receiver aborted for session %s: sender disconnected before completion", session.Token)
+		return
+	}
+
+	ackErr := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(45 * time.Second)
+		for {
+			if err := conn.SetReadDeadline(deadline); err != nil {
+				ackErr <- err
+				return
+			}
+
+			messageType, data, err := conn.ReadMessage()
+			if err != nil {
+				ackErr <- err
+				return
+			}
+
+			if messageType != websocket.TextMessage {
+				continue
+			}
+
+			var msg protocol.Message
+			if json.Unmarshal(data, &msg) != nil {
+				continue
+			}
+
+			if msg.Type != protocol.MessageTypeDownloadAck {
+				continue
+			}
+
+			select {
+			case downloadAckChan <- struct{}{}:
+			default:
+			}
+			ackErr <- nil
+			return
+		}
+	}()
+
+	select {
+	case <-downloadAckChan:
+		s.sendStatusToSender(session, protocol.StateComplete, "Receiver finalized transfer")
+		closeDone()
+		session.SetState(protocol.StateComplete)
+		log.Printf("Browser receiver completed for session %s", session.Token)
+	case err := <-ackErr:
+		if err == nil {
+			s.sendStatusToSender(session, protocol.StateComplete, "Receiver finalized transfer")
+			closeDone()
+			session.SetState(protocol.StateComplete)
+			log.Printf("Browser receiver completed for session %s", session.Token)
+			return
+		}
+		s.sendStatusToSender(session, protocol.StateFailed, "Receiver did not confirm completion")
+		closeDone()
+		session.SetState(protocol.StateFailed)
+		log.Printf("Browser receiver download ack failed for session %s: %v", session.Token, err)
+	}
 }
 
 // handleCLIReceiver handles CLI connection for receive sessions

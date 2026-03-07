@@ -12,6 +12,7 @@ const (
 	MessageTypeFileCommitted    MessageType = "file_committed"
 	MessageTypeFileReceivedAck  MessageType = "file_received_ack"
 	MessageTypeFileAcknowledged MessageType = "file_acknowledged"
+	MessageTypeDownloadAck      MessageType = "download_ack"
 	MessageTypeComplete         MessageType = "complete"
 	MessageTypeStatus           MessageType = "status"
 	MessageTypeError            MessageType = "error"
@@ -89,6 +90,9 @@ type FileCommittedPayload struct {
 type FileReceivedAckPayload struct {
 	FileID int `json:"file_id"`
 }
+
+// DownloadAckPayload signals browser-side transfer finalization.
+type DownloadAckPayload struct{}
 
 // Error codes
 const (

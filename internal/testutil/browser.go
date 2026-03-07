@@ -323,6 +323,18 @@ func (b *BrowserDownloader) Download(ctx context.Context) (*DownloadResult, erro
 		return nil
 	}
 
+	sendDownloadAck := func() error {
+		ack := map[string]interface{}{
+			"type":    "download_ack",
+			"payload": map[string]interface{}{},
+		}
+		ackData, _ := json.Marshal(ack)
+		if err := conn.WriteMessage(websocket.TextMessage, ackData); err != nil {
+			return fmt.Errorf("failed to send download_ack: %w", err)
+		}
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -399,6 +411,9 @@ func (b *BrowserDownloader) Download(ctx context.Context) (*DownloadResult, erro
 					if err := finalizeCurrent(); err != nil {
 						return result, err
 					}
+				}
+				if err := sendDownloadAck(); err != nil {
+					return result, err
 				}
 				result.Complete = true
 				return result, nil

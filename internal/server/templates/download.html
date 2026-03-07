@@ -565,11 +565,15 @@
         let chunks = [];
         let downloadCompleted = false;
         let transferCompleted = false;
+        let transferHadError = false;
+        let activeSocket = null;
+        let downloadAckSent = false;
         
         let messageQueue = [];
         let processing = false;
         let completeReceived = false;
         let closeReceived = false;
+        let pendingBinaryReads = 0;
         let queueResolve = null;
         
         async function processQueue() {
@@ -599,11 +603,16 @@
                 await completeCurrentFile();
             }
             
-            if ((completeReceived || closeReceived) && !downloadCompleted && fileMetadata && decryptedSize > 0 && decryptedSize < fileMetadata.size) {
-                showError(`Transfer incomplete: received ${formatSize(decryptedSize)} of ${formatSize(fileMetadata.size)}`);
+            const ioDrained = messageQueue.length === 0 && pendingBinaryReads === 0;
+
+            if ((completeReceived || closeReceived) && ioDrained && !downloadCompleted && fileMetadata && decryptedSize > 0 && decryptedSize < fileMetadata.size) {
+                showError(`Transfer incomplete: received ${formatSize(decryptedSize)} of ${formatSize(fileMetadata.size)} (${decryptedSize}/${fileMetadata.size} bytes)`);
             }
             
-            if ((completeReceived || closeReceived) && messageQueue.length === 0) {
+            if ((completeReceived || closeReceived) && ioDrained) {
+                if (completeReceived && !transferHadError && !downloadAckSent && !fileMetadata) {
+                    await sendDownloadAck();
+                }
                 finalizeTransfer();
                 if (queueResolve) {
                     queueResolve();
@@ -654,20 +663,33 @@
             processing = false;
             completeReceived = false;
             closeReceived = false;
+            pendingBinaryReads = 0;
+            transferCompleted = false;
+            transferHadError = false;
+            downloadAckSent = false;
             
             try {
                 const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const wsUrl = wsScheme + window.location.host + '/api/sessions/' + token + '/ws';
                 const ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
+                activeSocket = ws;
                 
                 ws.onopen = () => {
                     btn.textContent = 'Receiving...';
                 };
                 
                 ws.onmessage = async (event) => {
-                    if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
-                        const buffer = event.data instanceof ArrayBuffer ? event.data : await event.data.arrayBuffer();
-                        messageQueue.push({ type: 'binary', data: buffer });
+                    if (event.data instanceof ArrayBuffer) {
+                        messageQueue.push({ type: 'binary', data: event.data });
+                    } else if (event.data instanceof Blob) {
+                        pendingBinaryReads++;
+                        try {
+                            const buffer = await event.data.arrayBuffer();
+                            messageQueue.push({ type: 'binary', data: buffer });
+                        } finally {
+                            pendingBinaryReads--;
+                        }
                     } else {
                         const msg = JSON.parse(event.data);
                         
@@ -734,6 +756,18 @@
             document.getElementById('downloadBtn').style.display = 'none';
             document.getElementById('progressContainer').style.display = 'none';
         }
+
+        async function sendDownloadAck() {
+            if (downloadAckSent || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            activeSocket.send(JSON.stringify({
+                type: 'download_ack',
+                payload: {}
+            }));
+            downloadAckSent = true;
+        }
         
         function updateProgress() {
             if (!fileMetadata) return;
@@ -753,6 +787,7 @@
         }
         
         function showError(msg) {
+            transferHadError = true;
             const el = document.getElementById('error');
             el.textContent = msg;
             el.style.display = 'block';

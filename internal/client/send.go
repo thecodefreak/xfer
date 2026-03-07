@@ -229,8 +229,49 @@ func Send(ctx context.Context, opts SendOptions) error {
 		return fmt.Errorf("failed to send completion: %w", err)
 	}
 
+	fmt.Println("\nWaiting for receiver finalization...")
+	if err := waitForTransferFinalization(ctx, client, conn, opts.Timeout); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+
 	fmt.Println("\nTransfer complete!")
 	return nil
+}
+
+func waitForTransferFinalization(ctx context.Context, client *Client, conn *websocket.Conn, timeout time.Duration) error {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("failed to set finalization deadline: %w", err)
+	}
+
+	for {
+		msg, err := client.ReadMessage(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("transfer finalization failed: %w", err)
+		}
+		if msg == nil || msg.Type != protocol.MessageTypeStatus {
+			continue
+		}
+
+		var status protocol.TransferStatus
+		payloadBytes, _ := json.Marshal(msg.Payload)
+		json.Unmarshal(payloadBytes, &status)
+
+		switch status.State {
+		case protocol.StateComplete:
+			return nil
+		case protocol.StateFailed:
+			if status.Message != "" {
+				return fmt.Errorf("transfer failed: %s", status.Message)
+			}
+			return fmt.Errorf("transfer failed")
+		}
+	}
 }
 
 func sendFileWithProgress(client *Client, conn *websocket.Conn, path string, keys *crypto.DerivedKeys, progress *Progress, showProgress bool) error {

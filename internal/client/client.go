@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	pingInterval   = 30 * time.Second
-	pongWait       = 60 * time.Second
-	writeWait      = 10 * time.Second
-	bufferSize     = 64 * 1024
-	maxMessageSize = 256 * 1024
+	pingInterval     = 30 * time.Second
+	pongWait         = 60 * time.Second
+	controlWriteWait = 10 * time.Second
+	binaryWriteWait  = 90 * time.Second
+	bufferSize       = 64 * 1024
+	maxMessageSize   = 256 * 1024
 )
 
 type Client struct {
@@ -197,7 +198,7 @@ func (c *Client) ConnectWebSocket(ctx context.Context, wsURL string) (*websocket
 				return
 			case <-ticker.C:
 				state.mu.Lock()
-				conn.SetWriteDeadline(time.Now().Add(writeWait))
+				conn.SetWriteDeadline(time.Now().Add(controlWriteWait))
 				err := conn.WriteMessage(websocket.PingMessage, nil)
 				state.mu.Unlock()
 				if err != nil {
@@ -218,7 +219,7 @@ func (c *Client) SendMessage(conn *websocket.Conn, msg protocol.Message) error {
 	state := c.getConnState(conn)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	conn.SetWriteDeadline(time.Now().Add(controlWriteWait))
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -226,7 +227,7 @@ func (c *Client) SendBinary(conn *websocket.Conn, data []byte) error {
 	state := c.getConnState(conn)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	conn.SetWriteDeadline(time.Now().Add(binaryWriteWait))
 	return conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
@@ -268,7 +269,7 @@ func (c *Client) CloseConn(conn *websocket.Conn) error {
 	state.once.Do(func() { close(state.done) })
 
 	state.mu.Lock()
-	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	conn.SetWriteDeadline(time.Now().Add(controlWriteWait))
 	err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	state.mu.Unlock()
 

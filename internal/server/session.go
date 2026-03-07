@@ -23,10 +23,12 @@ type Session struct {
 	Metadata   *protocol.FileMetadata
 
 	// Data relay channels
-	dataChan     chan wsMessage
-	doneChan     chan struct{}
-	browserReady chan struct{}
-	fileAckChan  chan int
+	dataChan        chan wsMessage
+	doneChan        chan struct{}
+	browserReady    chan struct{}
+	fileAckChan     chan int
+	downloadAckChan chan struct{}
+	senderCompleted bool
 
 	mu sync.Mutex // Protects connection writes
 }

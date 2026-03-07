@@ -146,7 +146,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - golang:1.24-alpine
+          - golang:1.24-bookworm
           - alpine:3.20
     steps:
       - name: Scan ${{ matrix.image }} for HIGH/CRITICAL CVEs

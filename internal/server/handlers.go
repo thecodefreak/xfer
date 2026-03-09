@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"xfer/internal/crypto"
-	"xfer/internal/protocol"
+	"github.com/thecodefreak/xfer/internal/crypto"
+	"github.com/thecodefreak/xfer/internal/protocol"
 )
 
 // handleCreateSession creates a new transfer session

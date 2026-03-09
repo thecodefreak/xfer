@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"xfer/internal/protocol"
+	"github.com/thecodefreak/xfer/internal/protocol"
 )
 
 const (

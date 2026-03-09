@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"xfer/internal/config"
+	"github.com/thecodefreak/xfer/internal/config"
 )
 
 var configCmd = &cobra.Command{

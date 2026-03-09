@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"xfer/cmd/xfer/commands"
+	"github.com/thecodefreak/xfer/cmd/xfer/commands"
 )
 
 func main() {

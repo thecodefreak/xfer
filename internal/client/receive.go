@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"xfer/internal/crypto"
-	"xfer/internal/protocol"
+	"github.com/thecodefreak/xfer/internal/crypto"
+	"github.com/thecodefreak/xfer/internal/protocol"
 )
 
 type ReceiveOptions struct {

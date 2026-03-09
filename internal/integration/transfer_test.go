@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"xfer/internal/crypto"
-	"xfer/internal/testutil"
+	"github.com/thecodefreak/xfer/internal/crypto"
+	"github.com/thecodefreak/xfer/internal/testutil"
 )
 
 func TestBrowserUploadToCLIReceive(t *testing.T) {

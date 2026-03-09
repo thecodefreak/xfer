@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"xfer/internal/server"
+	"github.com/thecodefreak/xfer/internal/server"
 )
 
 func main() {

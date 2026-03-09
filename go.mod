@@ -1,4 +1,4 @@
-module xfer
+module github.com/thecodefreak/xfer
 
 go 1.24.0
 

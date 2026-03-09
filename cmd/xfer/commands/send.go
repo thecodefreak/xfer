@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"xfer/internal/client"
+	"github.com/thecodefreak/xfer/internal/client"
 )
 
 var sendZip bool

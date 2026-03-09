@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"xfer/internal/server"
+	"github.com/thecodefreak/xfer/internal/server"
 )
 
 type TestServer struct {

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"xfer/internal/protocol"
+	"github.com/thecodefreak/xfer/internal/protocol"
 
 	"github.com/gorilla/websocket"
 )

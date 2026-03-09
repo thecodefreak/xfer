@@ -13,8 +13,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	qrcode "github.com/skip2/go-qrcode"
-	"xfer/internal/crypto"
-	"xfer/internal/protocol"
+	"github.com/thecodefreak/xfer/internal/crypto"
+	"github.com/thecodefreak/xfer/internal/protocol"
 )
 
 type SendOptions struct {

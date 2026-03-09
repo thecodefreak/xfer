@@ -22,10 +22,14 @@ Xfer enables seamless file sharing between devices using QR codes and end-to-end
 ### Installation
 
 ```bash
-# From source
-go install xfer/cmd/xfer@latest
+# Quick install (Linux/macOS)
+curl -fsSL https://raw.githubusercontent.com/thecodefreak/xfer/main/install.sh | bash
+
+# With Go
+go install github.com/thecodefreak/xfer/cmd/xfer@latest
 
 # Or download pre-built binaries from releases
+# https://github.com/thecodefreak/xfer/releases
 ```
 
 ### First-time Setup
@@ -83,7 +87,7 @@ Mobile Browser ──HTTPS/E2E──► Relay Server ◄──WSS/E2E── CLI 
 - **Zero-knowledge server** - cannot access file contents or metadata
 - Optional **Argon2id password protection** for extra security
 
-See [SECURITY.md](../SECURITY.md) for detailed security analysis.
+See [SECURITY.md](SECURITY.md) for detailed security analysis.
 
 ## Configuration
 
@@ -101,14 +105,10 @@ hide-filenames: false
 ### Commands
 
 ```bash
-xfer send <files...>           # Send files
-xfer receive [path]            # Receive files
-xfer config <get|set|list>     # Manage configuration
-xfer history [clear]           # View/manage transfer history
-xfer setup                     # Interactive setup wizard
-xfer info                      # Show current config
-xfer test                      # Test server connectivity
-xfer version                   # Show version
+xfer send <files...>              # Send files
+xfer receive [path]               # Receive files
+xfer config <get|set|list|reset>  # Manage configuration
+xfer version                      # Show version
 ```
 
 ## Server Deployment
@@ -156,7 +156,7 @@ Docker release tags are published as `v*` and `latest`.
 
 ## Architecture
 
-See [ARCHITECTURE.md](../ARCHITECTURE.md) for technical details.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details.
 
 ## Development
 

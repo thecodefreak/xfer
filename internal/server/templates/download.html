@@ -433,21 +433,33 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
     <script>
         const token = '{{.Token}}';
         let keyStr = null;
-        let passwordKey = null;
+        let encryptedKeyStr = null;
+        let saltStr = null;
+        let isPasswordProtected = false;
         let fileMetadata = null;
         let completedFiles = [];
+
+        const ARGON2_TIME = 3;
+        const ARGON2_MEMORY = 65536; // 64MB in KB
+        const ARGON2_PARALLELISM = 4;
+        const ARGON2_KEY_LENGTH = 32;
         
         function parseHash() {
             const hash = window.location.hash.substring(1);
             const params = new URLSearchParams(hash);
-            keyStr = params.get('k');
-            const hasPassword = params.get('p') === '1';
             
-            if (hasPassword) {
+            keyStr = params.get('k');
+            encryptedKeyStr = params.get('e');
+            saltStr = params.get('s');
+            
+            if (encryptedKeyStr && saltStr) {
+                isPasswordProtected = true;
                 document.getElementById('passwordSection').style.display = 'block';
+                return true;
             }
             
             if (!keyStr) {
@@ -532,25 +544,63 @@
             };
         }
         
+        async function decryptMasterKeyWithPassword(encryptedKey, password, salt) {
+            const result = await argon2.hash({
+                pass: password,
+                salt: salt,
+                time: ARGON2_TIME,
+                mem: ARGON2_MEMORY,
+                parallelism: ARGON2_PARALLELISM,
+                hashLen: ARGON2_KEY_LENGTH,
+                type: argon2.ArgonType.Argon2id
+            });
+            
+            const passwordKey = await crypto.subtle.importKey(
+                'raw',
+                result.hash,
+                { name: 'AES-GCM' },
+                false,
+                ['decrypt']
+            );
+            
+            const nonce = salt.slice(0, 12);
+            
+            const decrypted = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: nonce },
+                passwordKey,
+                encryptedKey
+            );
+            
+            return new Uint8Array(decrypted);
+        }
+
+        async function initializeKeys(masterKeyBytes) {
+            const masterKey = await crypto.subtle.importKey(
+                'raw',
+                masterKeyBytes,
+                { name: 'HKDF' },
+                false,
+                ['deriveKey', 'deriveBits']
+            );
+            
+            const keys = await deriveKeys(masterKey);
+            fileKey = keys.fileKey;
+            metaKey = keys.metaKey;
+            fileNoncePrefix = keys.fileNoncePrefix;
+            metaNoncePrefix = keys.metaNoncePrefix;
+        }
+
         async function init() {
             if (!parseHash()) return;
             
+            if (isPasswordProtected) {
+                document.getElementById('downloadBtn').textContent = 'Decrypt & Download';
+                return;
+            }
+            
             try {
                 const keyBytes = base64UrlToArrayBuffer(keyStr);
-                const masterKey = await crypto.subtle.importKey(
-                    'raw',
-                    keyBytes,
-                    { name: 'HKDF' },
-                    false,
-                    ['deriveKey', 'deriveBits']
-                );
-                
-                const keys = await deriveKeys(masterKey);
-                fileKey = keys.fileKey;
-                metaKey = keys.metaKey;
-                fileNoncePrefix = keys.fileNoncePrefix;
-                metaNoncePrefix = keys.metaNoncePrefix;
-                
+                await initializeKeys(keyBytes);
             } catch (e) {
                 showError('Failed to initialize encryption: ' + e.message);
             }
@@ -651,12 +701,29 @@
             const passwordSection = document.getElementById('passwordSection');
             const password = document.getElementById('password').value;
             
-            if (passwordSection.style.display !== 'none' && !password) {
+            if (isPasswordProtected && !password) {
                 showError('Please enter the password');
                 return;
             }
             
             btn.disabled = true;
+            
+            if (isPasswordProtected) {
+                btn.textContent = 'Decrypting key...';
+                try {
+                    const encryptedKey = new Uint8Array(base64UrlToArrayBuffer(encryptedKeyStr));
+                    const salt = new Uint8Array(base64UrlToArrayBuffer(saltStr));
+                    
+                    const masterKeyBytes = await decryptMasterKeyWithPassword(encryptedKey, password, salt);
+                    await initializeKeys(masterKeyBytes);
+                } catch (e) {
+                    showError('Invalid password or corrupted data');
+                    btn.disabled = false;
+                    btn.textContent = 'Decrypt & Download';
+                    return;
+                }
+            }
+            
             btn.textContent = 'Connecting...';
             
             messageQueue = [];

@@ -130,9 +130,13 @@ func Send(ctx context.Context, opts SendOptions) error {
 		}
 	}
 
-	downloadURL := session.DownloadURL + "#k=" + keyStr
+	var downloadURL string
 	if opts.Password != "" {
-		downloadURL += "&p=1"
+		encKeyStr := crypto.EncodeKey(encryptedMasterKey)
+		saltStr := crypto.EncodeKey(salt)
+		downloadURL = session.DownloadURL + "#e=" + encKeyStr + "&s=" + saltStr
+	} else {
+		downloadURL = session.DownloadURL + "#k=" + keyStr
 	}
 
 	metadata := protocol.FileMetadata{

@@ -44,7 +44,7 @@ if [ -z "${TAG:-}" ]; then
     exit 1
 fi
 
-VER="${TAG#release-v}"
+VER="${TAG#v}"
 ASSET_URL="https://github.com/${REPO}/releases/download/${TAG}/xfer_v${VER}_${OS}_${ARCH}.tar.gz"
 
 TMP_DIR="$(mktemp -d)"

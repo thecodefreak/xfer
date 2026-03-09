@@ -88,6 +88,18 @@ jobs:
             ext: .exe
             archive: zip
             platform_id: windows_386
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+            ext: ""
+            archive: tar.gz
+            platform_id: darwin_amd64
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+            ext: ""
+            archive: tar.gz
+            platform_id: darwin_arm64
 
     steps:
       - name: Check out source
@@ -216,7 +228,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.version_tag }}
           target_commitish: ${{ github.sha }}
           name: ${{ needs.prepare.outputs.version_tag }}
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}

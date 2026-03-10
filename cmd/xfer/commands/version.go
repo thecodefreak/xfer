@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
@@ -11,6 +12,24 @@ var (
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )
+
+func init() {
+	if Version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			Version = info.Main.Version
+		}
+	}
+	if Commit == "unknown" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				if setting.Key == "vcs.revision" && len(setting.Value) >= 7 {
+					Commit = setting.Value[:7]
+					break
+				}
+			}
+		}
+	}
+}
 
 var versionCmd = &cobra.Command{
 	Use:   "version",

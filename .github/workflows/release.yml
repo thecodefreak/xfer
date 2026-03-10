@@ -130,8 +130,15 @@ jobs:
             export GOARM
           fi
 
-          go build -trimpath -ldflags "-s -w" -o "build/xfer${EXT}" ./cmd/xfer
-          go build -trimpath -ldflags "-s -w" -o "build/xfer-server${EXT}" ./cmd/xfer-server
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_SHORT="${GITHUB_SHA::7}"
+          LDFLAGS="-s -w"
+          LDFLAGS="${LDFLAGS} -X 'github.com/thecodefreak/xfer/cmd/xfer/commands.Version=${VERSION_TAG}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/thecodefreak/xfer/cmd/xfer/commands.Commit=${COMMIT_SHORT}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/thecodefreak/xfer/cmd/xfer/commands.BuildDate=${BUILD_DATE}'"
+
+          go build -trimpath -ldflags "${LDFLAGS}" -o "build/xfer${EXT}" ./cmd/xfer
+          go build -trimpath -ldflags "${LDFLAGS}" -o "build/xfer-server${EXT}" ./cmd/xfer-server
 
           if [[ "${ARCHIVE}" == "tar.gz" ]]; then
             tar -C build -czf "dist/xfer_${VERSION_TAG}_${PLATFORM_ID}.tar.gz" "xfer${EXT}"

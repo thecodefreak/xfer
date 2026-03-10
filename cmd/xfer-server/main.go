@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thecodefreak/xfer/cmd/xfer/commands"
 	"github.com/thecodefreak/xfer/internal/server"
 )
 
@@ -27,6 +28,8 @@ func main() {
 	enableRateLimit := flag.Bool("enable-rate-limit", parseBool(getEnv("XFER_ENABLE_RATE_LIMIT", "true")), "Enable rate limiting")
 
 	flag.Parse()
+
+	log.Printf("xfer-server %s (commit %s, built %s)", commands.Version, commands.Commit, commands.BuildDate)
 
 	// Create server config
 	config := &server.Config{

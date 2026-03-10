@@ -1,6 +1,6 @@
 # Binaries
-xfer
-xfer-server
+/xfer
+/xfer-server
 *.exe
 *.dll
 *.so
